@@ -417,24 +417,36 @@ async function buildDashboard(params: { profile?: string; configPath?: string; u
   };
 }
 
-function dashboardLines(dashboard: Awaited<ReturnType<typeof buildDashboard>>): string[] {
+function ansi(code: string, text: string): string {
+  return `\u001b[${code}m${text}\u001b[0m`;
+}
+
+function dashboardLines(dashboard: Awaited<ReturnType<typeof buildDashboard>>, color = false): string[] {
   const chips = arrayFromPayload(dashboard.chips);
   const profile = dashboard.context.profile ?? "env/default";
   const session = dashboard.context.agentSessionId ? shortId(dashboard.context.agentSessionId) : "none";
+  const accent = (text: string) => color ? ansi("1;36", text) : text;
+  const muted = (text: string) => color ? ansi("90", text) : text;
+  const dim = (text: string) => color ? ansi("2", text) : text;
+  const success = (text: string) => color ? ansi("32", text) : text;
+  const warning = (text: string) => color ? ansi("33", text) : text;
+  const error = (text: string) => color ? ansi("31", text) : text;
+  const issueCount = dashboard.openIssues.count > 0 ? warning(String(dashboard.openIssues.count)) : success(String(dashboard.openIssues.count));
+  const failedCount = dashboard.failedTaskResults.count > 0 ? error(`${dashboard.failedTaskResults.shown}/${dashboard.failedTaskResults.count}`) : success(`${dashboard.failedTaskResults.shown}/${dashboard.failedTaskResults.count}`);
   return [
-    "QDash Harness",
-    `profile ${profile}   chip ${dashboard.context.chipId}   session ${session}`,
+    accent("QDash Harness"),
+    `${muted("profile")} ${accent(profile)}   ${muted("chip")} ${accent(dashboard.context.chipId)}   ${muted("session")} ${dim(session)}`,
     "",
-    `chips ${chips.length}   open issues ${dashboard.openIssues.count}   executions ${dashboard.recentExecutions.shown}/${dashboard.recentExecutions.count}   failed tasks ${dashboard.failedTaskResults.shown}/${dashboard.failedTaskResults.count}`,
+    `${muted("chips")} ${success(String(chips.length))}   ${muted("open issues")} ${issueCount}   ${muted("executions")} ${accent(`${dashboard.recentExecutions.shown}/${dashboard.recentExecutions.count}`)}   ${muted("failed tasks")} ${failedCount}`,
     "",
-    "Open issues",
-    ...(dashboard.openIssues.items.length > 0 ? dashboard.openIssues.items.map((item, index) => `  ${formatItem(item, `issue-${index + 1}`)}`) : ["  none"]),
+    accent("Open issues"),
+    ...(dashboard.openIssues.items.length > 0 ? dashboard.openIssues.items.map((item, index) => `  ${warning(formatItem(item, `issue-${index + 1}`))}`) : [`  ${dim("none")}`]),
     "",
-    "Recent executions",
-    ...(dashboard.recentExecutions.items.length > 0 ? dashboard.recentExecutions.items.map((item, index) => `  ${formatItem(item, `exec-${index + 1}`)}`) : ["  none"]),
+    accent("Recent executions"),
+    ...(dashboard.recentExecutions.items.length > 0 ? dashboard.recentExecutions.items.map((item, index) => `  ${muted(formatItem(item, `exec-${index + 1}`))}`) : [`  ${dim("none")}`]),
     "",
-    "Failed task results",
-    ...(dashboard.failedTaskResults.items.length > 0 ? dashboard.failedTaskResults.items.map((item, index) => `  ${formatItem(item, `task-${index + 1}`)}`) : ["  none"]),
+    accent("Failed task results"),
+    ...(dashboard.failedTaskResults.items.length > 0 ? dashboard.failedTaskResults.items.map((item, index) => `  ${error(formatItem(item, `task-${index + 1}`))}`) : [`  ${dim("none")}`]),
   ];
 }
 
@@ -976,10 +988,10 @@ export default function qdashExtension(pi: ExtensionAPI) {
       "Use qdash_dashboard when the user asks for QDash status, overview, triage, or a dashboard.",
       "Summarize dashboard data instead of dumping large raw payloads.",
     ],
-    parameters: Type.Object({ ...connectionParams, ...chipScopedParams, limit: Type.Optional(Type.Number()) }),
-    async execute(_toolCallId, params: { profile?: string; configPath?: string; useEnv?: boolean; chipId?: string; limit?: number }) {
+    parameters: Type.Object({ ...connectionParams, ...chipScopedParams, limit: Type.Optional(Type.Number()), color: Type.Optional(Type.Boolean({ description: "Emit ANSI colors in text output for terminal display." })) }),
+    async execute(_toolCallId, params: { profile?: string; configPath?: string; useEnv?: boolean; chipId?: string; limit?: number; color?: boolean }) {
       const dashboard = await buildDashboard(params);
-      return toTextToolResult(dashboardLines(dashboard).join("\n"), dashboard, { tool: "qdash_dashboard", lines: dashboardLines(dashboard) });
+      return toTextToolResult(dashboardLines(dashboard, params.color).join("\n"), dashboard, { tool: "qdash_dashboard", lines: dashboardLines(dashboard) });
     },
     renderCall(args, theme) {
       const profile = args.profile ?? currentContext.profile ?? "context";
@@ -998,8 +1010,8 @@ export default function qdashExtension(pi: ExtensionAPI) {
     description: "Create a read-only triage overview from open issues and failed task results for the current QDash context.",
     promptSnippet: "Summarize QDash open issues and failed task results for triage",
     promptGuidelines: ["Use qdash_triage_overview when the user asks what to investigate next in QDash."],
-    parameters: Type.Object({ ...connectionParams, ...chipScopedParams, limit: Type.Optional(Type.Number()) }),
-    async execute(_toolCallId, params: { profile?: string; configPath?: string; useEnv?: boolean; chipId?: string; limit?: number }) {
+    parameters: Type.Object({ ...connectionParams, ...chipScopedParams, limit: Type.Optional(Type.Number()), color: Type.Optional(Type.Boolean({ description: "Emit ANSI colors in text output for terminal display." })) }),
+    async execute(_toolCallId, params: { profile?: string; configPath?: string; useEnv?: boolean; chipId?: string; limit?: number; color?: boolean }) {
       const dashboard = await buildDashboard(params);
       const triage = {
         context: dashboard.context,
@@ -1010,16 +1022,20 @@ export default function qdashExtension(pi: ExtensionAPI) {
           dashboard.openIssues.count > 0 ? "Review open issues and correlate with recent executions." : undefined,
         ].filter(Boolean),
       };
+      const accent = (text: string) => params.color ? ansi("1;36", text) : text;
+      const dim = (text: string) => params.color ? ansi("2", text) : text;
+      const success = (text: string) => params.color ? ansi("32", text) : text;
+      const error = (text: string) => params.color ? ansi("31", text) : text;
       const lines = [
-        "QDash Triage",
-        `open issues ${triage.openIssues.count}`,
-        `failed tasks ${triage.failedTaskResults.shown}/${triage.failedTaskResults.count}`,
+        accent("QDash Triage"),
+        `open issues ${triage.openIssues.count > 0 ? ansi("33", String(triage.openIssues.count)) : success(String(triage.openIssues.count))}`,
+        `failed tasks ${triage.failedTaskResults.count > 0 ? error(`${triage.failedTaskResults.shown}/${triage.failedTaskResults.count}`) : success(`${triage.failedTaskResults.shown}/${triage.failedTaskResults.count}`)}`,
         "",
-        "Suggested focus",
-        ...(triage.suggestedFocus.length > 0 ? triage.suggestedFocus.map((item) => `  - ${item}`) : ["  none"]),
+        accent("Suggested focus"),
+        ...(triage.suggestedFocus.length > 0 ? triage.suggestedFocus.map((item) => `  - ${params.color ? ansi("33", item ?? "") : item}`) : [`  ${dim("none")}`]),
         "",
-        "Failed task results",
-        ...(dashboard.failedTaskResults.items.length > 0 ? dashboard.failedTaskResults.items.map((item, index) => `  ${formatItem(item, `task-${index + 1}`)}`) : ["  none"]),
+        accent("Failed task results"),
+        ...(dashboard.failedTaskResults.items.length > 0 ? dashboard.failedTaskResults.items.map((item, index) => `  ${params.color ? error(formatItem(item, `task-${index + 1}`)) : formatItem(item, `task-${index + 1}`)}`) : [`  ${dim("none")}`]),
       ];
       return toTextToolResult(lines.join("\n"), triage, { tool: "qdash_triage_overview" });
     },
