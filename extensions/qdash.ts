@@ -1,5 +1,7 @@
 import { randomUUID } from "node:crypto";
-import { existsSync, readFileSync } from "node:fs";
+import { dirname, join } from "node:path";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { homedir } from "node:os";
 
 import type { ExtensionAPI, Theme } from "@earendil-works/pi-coding-agent";
 import { QDashClient, defaultConfigPath, type DownloadedFile, type TaskResultFigureOptions } from "@oqtopus-team/qdash-client";
@@ -121,6 +123,7 @@ type QDashContextState = {
 };
 
 const CONTEXT_ENTRY_TYPE = "qdash-context";
+const GLOBAL_CONTEXT_PATH = join(homedir(), ".pi", "agent", "qdash-context.json");
 const WRITE_TOOL_NAMES = new Set([
   "qdash_create_agent_session",
   "qdash_submit_agent_action",
@@ -166,6 +169,58 @@ function contextStatusLine(theme?: Theme): string {
     `${accent("▣")} ${chipText}`,
     `🤖 ${sessionText}`,
   ].join(dim("  │  "));
+}
+
+function isQDashContextState(value: unknown): value is QDashContextState {
+  if (!value || typeof value !== "object") return false;
+  const context = value as QDashContextState;
+  return [context.profile, context.chipId, context.agentSessionId].every((item) => item === undefined || typeof item === "string");
+}
+
+function loadGlobalContext(): QDashContextState {
+  try {
+    if (!existsSync(GLOBAL_CONTEXT_PATH)) return {};
+    const data = JSON.parse(readFileSync(GLOBAL_CONTEXT_PATH, "utf8"));
+    return isQDashContextState(data) ? data : {};
+  } catch {
+    return {};
+  }
+}
+
+function saveGlobalContext(context: QDashContextState): void {
+  mkdirSync(dirname(GLOBAL_CONTEXT_PATH), { recursive: true });
+  writeFileSync(GLOBAL_CONTEXT_PATH, `${JSON.stringify(context, null, 2)}\n`, "utf8");
+}
+
+function adoptContextFromToolInput(input: unknown): boolean {
+  if (!input || typeof input !== "object") return false;
+  const params = input as { profile?: unknown; chipId?: unknown; sessionId?: unknown; useEnv?: unknown };
+  let changed = false;
+
+  if (typeof params.profile === "string" && params.profile.trim()) {
+    const profile = params.profile.trim();
+    if (currentContext.profile !== profile) {
+      const { chipId: _chipId, ...rest } = currentContext;
+      currentContext = { ...rest, profile };
+      changed = true;
+    }
+  } else if (params.useEnv === true && currentContext.profile !== undefined) {
+    const { profile: _profile, chipId: _chipId, ...rest } = currentContext;
+    currentContext = rest;
+    changed = true;
+  }
+
+  if (typeof params.chipId === "string" && params.chipId.trim() && currentContext.chipId !== params.chipId.trim()) {
+    currentContext = { ...currentContext, chipId: params.chipId.trim() };
+    changed = true;
+  }
+
+  if (typeof params.sessionId === "string" && params.sessionId.trim() && currentContext.agentSessionId !== params.sessionId.trim()) {
+    currentContext = { ...currentContext, agentSessionId: params.sessionId.trim() };
+    changed = true;
+  }
+
+  return changed;
 }
 
 function shortId(value: string, length = 10): string {
@@ -1595,12 +1650,33 @@ export default function qdashExtension(pi: ExtensionAPI) {
   });
 
   const persistContext = () => {
-    pi.appendEntry(CONTEXT_ENTRY_TYPE, { ...currentContext });
+    const context = { ...currentContext };
+    pi.appendEntry(CONTEXT_ENTRY_TYPE, context);
+    saveGlobalContext(context);
   };
 
   const refreshContextUi = (ctx: { ui: { theme?: Theme; setStatus: (key: string, value: string) => void; setWidget?: (key: string, lines: string[]) => void } }) => {
     ctx.ui.setStatus("qdash", contextStatusLine(ctx.ui.theme));
   };
+
+  const ensureActiveChip = async () => {
+    if (currentContext.chipId) return false;
+    const client = await makeClient({ profile: currentContext.profile });
+    currentContext = { ...currentContext, chipId: await client.getDefaultChipId() };
+    return true;
+  };
+
+  pi.on("tool_result", async (event, ctx) => {
+    if (event.isError || !event.toolName.startsWith("qdash_")) return;
+    if (!adoptContextFromToolInput(event.input)) return;
+    try {
+      await ensureActiveChip();
+    } catch {
+      // Keep the selected profile visible even if QDash cannot resolve chips right now.
+    }
+    persistContext();
+    if (ctx.hasUI) refreshContextUi(ctx);
+  });
 
   pi.registerCommand("qdash-setup", {
     description: "Quickly configure QDash context; usage: /qdash-setup [profile] [chip_id]",
@@ -1631,10 +1707,10 @@ export default function qdashExtension(pi: ExtensionAPI) {
         return;
       }
       const client = await makeClient({ profile });
-      currentContext = { ...currentContext, profile };
+      currentContext = { ...currentContext, profile, chipId: await client.getDefaultChipId() };
       persistContext();
       refreshContextUi(ctx);
-      ctx.ui.notify(`QDash profile set to ${profile}`, "info");
+      ctx.ui.notify(`QDash profile set to ${profile}, chip ${currentContext.chipId}`, "info");
     },
   });
 
@@ -1728,11 +1804,17 @@ export default function qdashExtension(pi: ExtensionAPI) {
     },
   });
 
-  pi.on("session_start", (_event, ctx) => {
+  pi.on("session_start", async (_event, ctx) => {
+    currentContext = loadGlobalContext();
     for (const entry of ctx.sessionManager.getEntries() as Array<{ type?: string; customType?: string; data?: unknown }>) {
-      if (entry.type === "custom" && entry.customType === CONTEXT_ENTRY_TYPE && entry.data && typeof entry.data === "object") {
-        currentContext = { ...(entry.data as QDashContextState) };
+      if (entry.type === "custom" && entry.customType === CONTEXT_ENTRY_TYPE && isQDashContextState(entry.data)) {
+        currentContext = { ...entry.data };
       }
+    }
+    try {
+      if (await ensureActiveChip()) persistContext();
+    } catch {
+      // Leave chip as auto when no QDash connection/profile is available at startup.
     }
     refreshContextUi(ctx);
   });
