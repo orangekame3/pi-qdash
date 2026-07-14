@@ -19,14 +19,17 @@ Use the pi-qdash tools instead of scraping the UI or hand-writing auth headers.
    - `qdash_list_flows`, `qdash_get_flow`
    - `qdash_list_executions`, `qdash_get_execution`
    - `qdash_list_ai_reviews`, `qdash_get_provenance_stats`
-3. Use agent calibration workflow tools when the user explicitly wants an agent workflow:
+3. Use harness overview tools for status and triage:
+   - `qdash_dashboard`
+   - `qdash_triage_overview`
+4. Use agent calibration workflow tools when the user explicitly wants an agent workflow:
    - `qdash_create_agent_session`
    - `qdash_get_agent_session`
    - `qdash_submit_agent_action`
    - `qdash_get_agent_action`, `qdash_list_agent_actions`, `qdash_wait_agent_action`
    - `qdash_list_agent_action_candidates`
    - `qdash_commit_agent_candidate`
-4. Use `qdash_query` for common read-only QDash operations not covered by a dedicated tool:
+5. Use `qdash_query` for common read-only QDash operations not covered by a dedicated tool:
    - `chips`, `default_chip`, `metrics_config`, `chip_metrics`
    - `chip_qubits`, `chip_qubit`, `chip_couplings`, `chip_coupling`
    - `timeseries`, `task_results`, `task_result`, `task_note`, `task_result_issues`
@@ -37,7 +40,7 @@ Use the pi-qdash tools instead of scraping the UI or hand-writing auth headers.
    - `flows`, `flow`, `flow_templates`, `flow_template`, `flow_helper_files`, `flow_helper_file`
    - `executions`, `execution`, `ai_reviews`, `ai_review_runs`, `ai_review_run`
    - `forum_posts`, `provenance_stats`, `provenance_history`, `provenance_changes`, `provenance_lineage`, `provenance_impact`
-5. `qdash_raw_get` — read-only GET endpoints not covered by `qdash_query`.
+6. `qdash_raw_get` — read-only GET endpoints not covered by `qdash_query`.
 
 ## Session context
 
@@ -48,6 +51,7 @@ Use these commands to make pi behave like a QDash-specific harness with persiste
 /qdash-use-chip [chip_id]
 /qdash-use-agent-session <session_id>
 /qdash-context
+/qdash-dashboard [limit]
 ```
 
 Prefer the current context when the user has already selected a profile/chip/session. Tools use that context when parameters are omitted.

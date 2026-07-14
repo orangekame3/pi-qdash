@@ -52,6 +52,9 @@ pi install git:github.com/orangekame3/pi-qdash
   - `qdash_list_flows`, `qdash_get_flow`
   - `qdash_list_executions`, `qdash_get_execution`
   - `qdash_list_ai_reviews`, `qdash_get_provenance_stats`
+- Harness overview tools:
+  - `qdash_dashboard`
+  - `qdash_triage_overview`
 - Agent calibration workflow tools:
   - `qdash_create_agent_session`
   - `qdash_get_agent_session`
@@ -75,10 +78,11 @@ This package also provides `/skill:qdash`, which guides pi to choose the right Q
 /qdash-use-chip [chip_id]
 /qdash-use-agent-session <session_id>
 /qdash-context
+/qdash-dashboard [limit]
 /qdash-config [profile]
 ```
 
-These commands manage session-local QDash context, update the pi status/widget, and show non-secret QDash configuration details. Tools use the current profile/chip context when their parameters are omitted.
+These commands manage session-local QDash context, update the pi status/widget, show a compact QDash dashboard, and show non-secret QDash configuration details. Tools use the current profile/chip context when their parameters are omitted.
 
 ## Development
 

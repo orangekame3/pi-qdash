@@ -305,6 +305,83 @@ function configProfiles(configPath = defaultConfigPath()): { path: string; exist
   return { path: configPath, exists: true, profiles };
 }
 
+function arrayFromPayload(payload: unknown): unknown[] {
+  if (Array.isArray(payload)) return payload;
+  if (payload && typeof payload === "object") {
+    const object = payload as Record<string, unknown>;
+    for (const key of ["items", "results", "data", "issues", "executions", "chips", "tasks"]) {
+      if (Array.isArray(object[key])) return object[key];
+    }
+  }
+  return [];
+}
+
+function compactItems(payload: unknown, keys: string[], limit: number): Record<string, unknown>[] {
+  return arrayFromPayload(payload).slice(0, limit).map((item) => {
+    if (!item || typeof item !== "object") return { value: item };
+    const object = item as Record<string, unknown>;
+    return Object.fromEntries(keys.filter((key) => key in object).map((key) => [key, object[key]]));
+  });
+}
+
+async function buildDashboard(params: { profile?: string; configPath?: string; useEnv?: boolean; chipId?: string; limit?: number }) {
+  params = applyQDashContext(params);
+  const limit = params.limit ?? 5;
+  const client = await makeClient(params);
+  const chipId = await defaultChipId(client, params.chipId);
+  const [chips, openIssues, recentExecutions, failedTaskResults, provenanceStats] = await Promise.allSettled([
+    client.listChips(),
+    rawGet(client, "/issues", { is_closed: false, limit }),
+    rawGet(client, "/executions", { chip_id: chipId, limit }),
+    rawGet(client, "/task-results", { chip_id: chipId, status: "failed", limit }),
+    client.getProvenanceStats(),
+  ]);
+  const value = <T>(result: PromiseSettledResult<T>): T | { error: string } => result.status === "fulfilled" ? result.value : { error: result.reason instanceof Error ? result.reason.message : String(result.reason) };
+  const issuesPayload = value(openIssues);
+  const executionsPayload = value(recentExecutions);
+  const failedTasksPayload = value(failedTaskResults);
+  return {
+    context: { ...currentContext, chipId },
+    chips: value(chips),
+    openIssues: {
+      count: arrayFromPayload(issuesPayload).length,
+      items: compactItems(issuesPayload, ["issue_id", "id", "title", "task_id", "is_closed", "severity", "created_at"], limit),
+      raw: issuesPayload,
+    },
+    recentExecutions: {
+      count: arrayFromPayload(executionsPayload).length,
+      items: compactItems(executionsPayload, ["execution_id", "flow_run_id", "flow_name", "status", "created_at", "started_at", "finished_at"], limit),
+      raw: executionsPayload,
+    },
+    failedTaskResults: {
+      count: arrayFromPayload(failedTasksPayload).length,
+      items: compactItems(failedTasksPayload, ["task_id", "task_name", "status", "qid", "coupling_id", "start_at", "created_at"], limit),
+      raw: failedTasksPayload,
+    },
+    provenanceStats: value(provenanceStats),
+  };
+}
+
+function dashboardLines(dashboard: Awaited<ReturnType<typeof buildDashboard>>): string[] {
+  const chips = arrayFromPayload(dashboard.chips);
+  return [
+    `QDash: ${contextSummary()}`,
+    `Chips: ${chips.length}`,
+    `Open issues: ${dashboard.openIssues.count}`,
+    `Recent executions: ${dashboard.recentExecutions.count}`,
+    `Failed task results: ${dashboard.failedTaskResults.count}`,
+    "",
+    "Open issues:",
+    ...dashboard.openIssues.items.map((item) => `- ${JSON.stringify(item)}`),
+    "",
+    "Recent executions:",
+    ...dashboard.recentExecutions.items.map((item) => `- ${JSON.stringify(item)}`),
+    "",
+    "Failed task results:",
+    ...dashboard.failedTaskResults.items.map((item) => `- ${JSON.stringify(item)}`),
+  ];
+}
+
 async function executeQuery(params: QDashQueryParams) {
   params = applyQDashContext(params);
   const client = await makeClient(params);
@@ -791,6 +868,43 @@ export default function qdashExtension(pi: ExtensionAPI) {
   });
 
   pi.registerTool({
+    name: "qdash_dashboard",
+    label: "QDash Dashboard",
+    description: "Build a compact read-only QDash dashboard for the current profile/chip context.",
+    promptSnippet: "Show QDash harness dashboard: chips, open issues, recent executions, failed task results, and provenance stats",
+    promptGuidelines: [
+      "Use qdash_dashboard when the user asks for QDash status, overview, triage, or a dashboard.",
+      "Summarize dashboard data instead of dumping large raw payloads.",
+    ],
+    parameters: Type.Object({ ...connectionParams, ...chipScopedParams, limit: Type.Optional(Type.Number()) }),
+    async execute(_toolCallId, params: { profile?: string; configPath?: string; useEnv?: boolean; chipId?: string; limit?: number }) {
+      const dashboard = await buildDashboard(params);
+      return toToolResult(dashboard, { tool: "qdash_dashboard", lines: dashboardLines(dashboard) });
+    },
+  });
+
+  pi.registerTool({
+    name: "qdash_triage_overview",
+    label: "QDash Triage Overview",
+    description: "Create a read-only triage overview from open issues and failed task results for the current QDash context.",
+    promptSnippet: "Summarize QDash open issues and failed task results for triage",
+    promptGuidelines: ["Use qdash_triage_overview when the user asks what to investigate next in QDash."],
+    parameters: Type.Object({ ...connectionParams, ...chipScopedParams, limit: Type.Optional(Type.Number()) }),
+    async execute(_toolCallId, params: { profile?: string; configPath?: string; useEnv?: boolean; chipId?: string; limit?: number }) {
+      const dashboard = await buildDashboard(params);
+      return toToolResult({
+        context: dashboard.context,
+        openIssues: dashboard.openIssues,
+        failedTaskResults: dashboard.failedTaskResults,
+        suggestedFocus: [
+          dashboard.failedTaskResults.count > 0 ? "Review failed task results first." : undefined,
+          dashboard.openIssues.count > 0 ? "Review open issues and correlate with recent executions." : undefined,
+        ].filter(Boolean),
+      }, { tool: "qdash_triage_overview" });
+    },
+  });
+
+  pi.registerTool({
     name: "qdash_raw_get",
     label: "QDash Raw GET",
     description: "Run a read-only raw GET request through qdash-client transport for endpoints not covered by qdash_query.",
@@ -861,6 +975,17 @@ export default function qdashExtension(pi: ExtensionAPI) {
       persistContext();
       refreshContextUi(ctx);
       ctx.ui.notify(`QDash agent session set to ${agentSessionId}`, "info");
+    },
+  });
+
+  pi.registerCommand("qdash-dashboard", {
+    description: "Show a compact QDash dashboard for the current context",
+    handler: async (args, ctx) => {
+      const limit = args.trim() ? Number(args.trim()) : undefined;
+      const dashboard = await buildDashboard({ limit: Number.isFinite(limit) ? limit : undefined });
+      refreshContextUi(ctx);
+      ctx.ui.setWidget("qdash", dashboardLines(dashboard));
+      ctx.ui.notify("QDash dashboard updated", "info");
     },
   });
 
