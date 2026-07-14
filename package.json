@@ -1,6 +1,6 @@
 {
   "name": "@orangekame3/pi-qdash",
-  "version": "0.15.1",
+  "version": "0.15.2",
   "description": "Pi extension for querying QDash via @oqtopus-team/qdash-client",
   "type": "module",
   "license": "Apache-2.0",
@@ -11,7 +11,11 @@
   },
   "homepage": "https://github.com/orangekame3/pi-qdash#readme",
   "bugs": "https://github.com/orangekame3/pi-qdash/issues",
-  "keywords": ["pi-package", "pi-extension", "qdash"],
+  "keywords": [
+    "pi-package",
+    "pi-extension",
+    "qdash"
+  ],
   "files": [
     "extensions",
     "skills"
@@ -20,15 +24,19 @@
     "access": "public"
   },
   "dependencies": {
-    "@oqtopus-team/qdash-client": "^0.1.1"
+    "@oqtopus-team/qdash-client": "^0.1.2"
   },
   "peerDependencies": {
     "@earendil-works/pi-coding-agent": "*",
     "typebox": "*"
   },
   "pi": {
-    "extensions": ["./extensions/qdash.ts"],
-    "skills": ["./skills"]
+    "extensions": [
+      "./extensions/qdash.ts"
+    ],
+    "skills": [
+      "./skills"
+    ]
   },
   "scripts": {
     "check": "tsc --noEmit"
