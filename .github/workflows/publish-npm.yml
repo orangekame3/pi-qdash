@@ -1,8 +1,9 @@
 name: Publish npm package
 
 on:
-  release:
-    types: [published]
+  push:
+    tags:
+      - "v*.*.*"
   workflow_dispatch:
 
 permissions:
@@ -27,6 +28,14 @@ jobs:
 
       - name: Check
         run: npm run check
+
+      - name: Verify tag matches package version
+        run: |
+          PACKAGE_VERSION="v$(node -p "require('./package.json').version")"
+          if [ "$GITHUB_REF_NAME" != "$PACKAGE_VERSION" ]; then
+            echo "Tag $GITHUB_REF_NAME does not match package version $PACKAGE_VERSION" >&2
+            exit 1
+          fi
 
       - name: Publish
         run: npm publish --access public --provenance
