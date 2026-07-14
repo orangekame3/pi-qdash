@@ -1,0 +1,27 @@
+{
+  "name": "pi-qdash",
+  "version": "0.3.0",
+  "description": "Pi extension for querying QDash via @oqtopus-team/qdash-client",
+  "type": "module",
+  "license": "Apache-2.0",
+  "keywords": ["pi-package", "pi-extension", "qdash"],
+  "dependencies": {
+    "@oqtopus-team/qdash-client": "^0.1.1"
+  },
+  "peerDependencies": {
+    "@earendil-works/pi-coding-agent": "*",
+    "typebox": "*"
+  },
+  "pi": {
+    "extensions": ["./extensions/qdash.ts"],
+    "skills": ["./skills"]
+  },
+  "scripts": {
+    "check": "tsc --noEmit"
+  },
+  "devDependencies": {
+    "@earendil-works/pi-coding-agent": "^0.74.0",
+    "typebox": "^1.0.55",
+    "typescript": "^5.8.0"
+  }
+}
