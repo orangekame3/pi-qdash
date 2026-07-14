@@ -122,8 +122,12 @@ function applyQDashContext<T extends { profile?: string; chipId?: string; sessio
 function contextSummary(): string {
   const profile = currentContext.profile ?? "env/default";
   const chip = currentContext.chipId ?? "auto-chip";
-  const session = currentContext.agentSessionId ? ` session:${currentContext.agentSessionId}` : "";
+  const session = currentContext.agentSessionId ? ` session:${shortId(currentContext.agentSessionId)}` : "";
   return `qdash ${profile} ${chip}${session}`;
+}
+
+function shortId(value: string, length = 10): string {
+  return value.length > length ? `${value.slice(0, length)}…` : value;
 }
 
 const QueryAction = Type.Union([
@@ -324,6 +328,45 @@ function compactItems(payload: unknown, keys: string[], limit: number): Record<s
   });
 }
 
+function payloadTotal(payload: unknown): number {
+  const fallback = arrayFromPayload(payload).length;
+  if (!payload || typeof payload !== "object") return fallback;
+  const object = payload as Record<string, unknown>;
+  for (const key of ["total", "total_count", "count", "total_items"]) {
+    const value = object[key];
+    if (typeof value === "number" && Number.isFinite(value)) return value;
+  }
+  return fallback;
+}
+
+function firstString(object: Record<string, unknown>, keys: string[]): string | undefined {
+  for (const key of keys) {
+    const value = object[key];
+    if (typeof value === "string" && value.length > 0) return value;
+    if (typeof value === "number" && Number.isFinite(value)) return String(value);
+  }
+  return undefined;
+}
+
+function statusIcon(status: string | undefined): string {
+  const normalized = status?.toLowerCase() ?? "";
+  if (["completed", "success", "succeeded", "active", "applied"].includes(normalized)) return "✓";
+  if (["failed", "error", "crashed"].includes(normalized)) return "✗";
+  if (["running", "pending", "queued", "in_progress"].includes(normalized)) return "…";
+  if (["cancelled", "canceled"].includes(normalized)) return "-";
+  return "•";
+}
+
+function formatItem(item: Record<string, unknown>, fallbackId: string): string {
+  const id = firstString(item, ["issue_id", "execution_id", "flow_run_id", "task_id", "id"]) ?? fallbackId;
+  const title = firstString(item, ["title", "task_name", "flow_name", "name"]);
+  const status = firstString(item, ["status", "execution_status", "activity_status"]);
+  const target = firstString(item, ["qid", "coupling_id"]);
+  return [statusIcon(status), shortId(id, 14), title, target ? `(${target})` : undefined, status ? `[${status}]` : undefined]
+    .filter(Boolean)
+    .join(" ");
+}
+
 async function buildDashboard(params: { profile?: string; configPath?: string; useEnv?: boolean; chipId?: string; limit?: number }) {
   params = applyQDashContext(params);
   const limit = params.limit ?? 5;
@@ -344,17 +387,20 @@ async function buildDashboard(params: { profile?: string; configPath?: string; u
     context: { ...currentContext, chipId },
     chips: value(chips),
     openIssues: {
-      count: arrayFromPayload(issuesPayload).length,
+      count: payloadTotal(issuesPayload),
+      shown: arrayFromPayload(issuesPayload).length,
       items: compactItems(issuesPayload, ["issue_id", "id", "title", "task_id", "is_closed", "severity", "created_at"], limit),
       raw: issuesPayload,
     },
     recentExecutions: {
-      count: arrayFromPayload(executionsPayload).length,
+      count: payloadTotal(executionsPayload),
+      shown: arrayFromPayload(executionsPayload).length,
       items: compactItems(executionsPayload, ["execution_id", "flow_run_id", "flow_name", "status", "created_at", "started_at", "finished_at"], limit),
       raw: executionsPayload,
     },
     failedTaskResults: {
-      count: arrayFromPayload(failedTasksPayload).length,
+      count: payloadTotal(failedTasksPayload),
+      shown: arrayFromPayload(failedTasksPayload).length,
       items: compactItems(failedTasksPayload, ["task_id", "task_name", "status", "qid", "coupling_id", "start_at", "created_at"], limit),
       raw: failedTasksPayload,
     },
@@ -364,21 +410,22 @@ async function buildDashboard(params: { profile?: string; configPath?: string; u
 
 function dashboardLines(dashboard: Awaited<ReturnType<typeof buildDashboard>>): string[] {
   const chips = arrayFromPayload(dashboard.chips);
+  const profile = dashboard.context.profile ?? "env/default";
+  const session = dashboard.context.agentSessionId ? shortId(dashboard.context.agentSessionId) : "none";
   return [
-    `QDash: ${contextSummary()}`,
-    `Chips: ${chips.length}`,
-    `Open issues: ${dashboard.openIssues.count}`,
-    `Recent executions: ${dashboard.recentExecutions.count}`,
-    `Failed task results: ${dashboard.failedTaskResults.count}`,
+    "QDash Harness",
+    `profile ${profile}   chip ${dashboard.context.chipId}   session ${session}`,
     "",
-    "Open issues:",
-    ...dashboard.openIssues.items.map((item) => `- ${JSON.stringify(item)}`),
+    `chips ${chips.length}   open issues ${dashboard.openIssues.count}   executions ${dashboard.recentExecutions.shown}/${dashboard.recentExecutions.count}   failed tasks ${dashboard.failedTaskResults.shown}/${dashboard.failedTaskResults.count}`,
     "",
-    "Recent executions:",
-    ...dashboard.recentExecutions.items.map((item) => `- ${JSON.stringify(item)}`),
+    "Open issues",
+    ...(dashboard.openIssues.items.length > 0 ? dashboard.openIssues.items.map((item, index) => `  ${formatItem(item, `issue-${index + 1}`)}`) : ["  none"]),
     "",
-    "Failed task results:",
-    ...dashboard.failedTaskResults.items.map((item) => `- ${JSON.stringify(item)}`),
+    "Recent executions",
+    ...(dashboard.recentExecutions.items.length > 0 ? dashboard.recentExecutions.items.map((item, index) => `  ${formatItem(item, `exec-${index + 1}`)}`) : ["  none"]),
+    "",
+    "Failed task results",
+    ...(dashboard.failedTaskResults.items.length > 0 ? dashboard.failedTaskResults.items.map((item, index) => `  ${formatItem(item, `task-${index + 1}`)}`) : ["  none"]),
   ];
 }
 
@@ -946,7 +993,7 @@ export default function qdashExtension(pi: ExtensionAPI) {
       currentContext = { ...currentContext, profile };
       persistContext();
       refreshContextUi(ctx);
-      ctx.ui.notify(`QDash profile set to ${profile} (${client.config.baseUrl})`, "info");
+      ctx.ui.notify(`QDash profile set to ${profile}`, "info");
     },
   });
 
@@ -978,6 +1025,17 @@ export default function qdashExtension(pi: ExtensionAPI) {
     },
   });
 
+  pi.registerCommand("qdash-clear-context", {
+    description: "Clear the current QDash profile/chip/agent-session context",
+    handler: async (_args, ctx) => {
+      currentContext = {};
+      persistContext();
+      refreshContextUi(ctx);
+      ctx.ui.setWidget("qdash", ["QDash context cleared", "profile env/default", "chip auto-chip", "session none"]);
+      ctx.ui.notify("QDash context cleared", "info");
+    },
+  });
+
   pi.registerCommand("qdash-dashboard", {
     description: "Show a compact QDash dashboard for the current context",
     handler: async (args, ctx) => {
@@ -985,7 +1043,18 @@ export default function qdashExtension(pi: ExtensionAPI) {
       const dashboard = await buildDashboard({ limit: Number.isFinite(limit) ? limit : undefined });
       refreshContextUi(ctx);
       ctx.ui.setWidget("qdash", dashboardLines(dashboard));
-      ctx.ui.notify("QDash dashboard updated", "info");
+      ctx.ui.notify(`QDash dashboard updated: ${dashboard.openIssues.count} open issues, ${dashboard.failedTaskResults.count} failed tasks`, "info");
+    },
+  });
+
+  pi.registerCommand("qdash-refresh", {
+    description: "Refresh the QDash dashboard widget for the current context",
+    handler: async (args, ctx) => {
+      const limit = args.trim() ? Number(args.trim()) : undefined;
+      const dashboard = await buildDashboard({ limit: Number.isFinite(limit) ? limit : undefined });
+      refreshContextUi(ctx);
+      ctx.ui.setWidget("qdash", dashboardLines(dashboard));
+      ctx.ui.notify("QDash widget refreshed", "info");
     },
   });
 
@@ -993,7 +1062,12 @@ export default function qdashExtension(pi: ExtensionAPI) {
     description: "Show the current QDash context",
     handler: async (_args, ctx) => {
       refreshContextUi(ctx);
-      ctx.ui.setWidget("qdash", JSON.stringify(currentContext, null, 2).split("\n"));
+      ctx.ui.setWidget("qdash", [
+        "QDash Context",
+        `profile ${currentContext.profile ?? "env/default"}`,
+        `chip ${currentContext.chipId ?? "auto-chip"}`,
+        `agent session ${currentContext.agentSessionId ?? "none"}`,
+      ]);
       ctx.ui.notify(contextSummary(), "info");
     },
   });

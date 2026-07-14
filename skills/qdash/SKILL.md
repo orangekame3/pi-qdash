@@ -52,6 +52,8 @@ Use these commands to make pi behave like a QDash-specific harness with persiste
 /qdash-use-agent-session <session_id>
 /qdash-context
 /qdash-dashboard [limit]
+/qdash-refresh [limit]
+/qdash-clear-context
 ```
 
 Prefer the current context when the user has already selected a profile/chip/session. Tools use that context when parameters are omitted.
