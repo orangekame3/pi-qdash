@@ -29,7 +29,9 @@ Use the pi-qdash tools instead of scraping the UI or hand-writing auth headers.
    - `qdash_submit_agent_action`
    - `qdash_get_agent_action`, `qdash_list_agent_actions`, `qdash_wait_agent_action`
    - `qdash_list_agent_action_candidates`
-   - `qdash_commit_agent_candidate`
+   - `qdash_execute_agent_action`
+   - `qdash_commit_agent_candidate`, `qdash_commit_agent_campaign_candidates`
+   - `qdash_get_agent_candidate_commit`, `qdash_apply_agent_candidate_commit`, `qdash_wait_agent_candidate_apply`
 5. Use `qdash_query` for common read-only QDash operations not covered by a dedicated tool:
    - `chips`, `default_chip`, `metrics_config`, `chip_metrics`
    - `chip_qubits`, `chip_qubit`, `chip_couplings`, `chip_coupling`

@@ -62,7 +62,9 @@ pi install git:github.com/orangekame3/pi-qdash
   - `qdash_submit_agent_action`
   - `qdash_get_agent_action`, `qdash_list_agent_actions`, `qdash_wait_agent_action`
   - `qdash_list_agent_action_candidates`
-  - `qdash_commit_agent_candidate`
+  - `qdash_execute_agent_action`
+  - `qdash_commit_agent_candidate`, `qdash_commit_agent_campaign_candidates`
+  - `qdash_get_agent_candidate_commit`, `qdash_apply_agent_candidate_commit`, `qdash_wait_agent_candidate_apply`
 - `qdash_query`: fallback for read-only queries that do not yet have a dedicated tool
 - `qdash_raw_get`: call read-only GET endpoints not covered by `qdash_query` through the qdash-client transport
 

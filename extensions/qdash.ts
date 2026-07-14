@@ -113,6 +113,9 @@ const WRITE_TOOL_NAMES = new Set([
   "qdash_create_agent_session",
   "qdash_submit_agent_action",
   "qdash_commit_agent_candidate",
+  "qdash_execute_agent_action",
+  "qdash_commit_agent_campaign_candidates",
+  "qdash_apply_agent_candidate_commit",
   "qdash_create_forum_post",
   "qdash_update_forum_post",
 ]);
@@ -1078,6 +1081,36 @@ export default function qdashExtension(pi: ExtensionAPI) {
   });
 
   pi.registerTool({
+    name: "qdash_execute_agent_action",
+    label: "QDash Execute Agent Action",
+    description: "Link/execute a QDash agent action from a source execution. This is a write operation and requires confirmation.",
+    promptSnippet: "Execute or link a QDash agent action after explicit user confirmation",
+    promptGuidelines: ["Use qdash_execute_agent_action only after the user confirms the exact source execution and action."],
+    parameters: Type.Object({
+      ...connectionParams,
+      sessionId: Type.String(),
+      actionId: Type.String(),
+      sourceExecutionId: Type.String(),
+      updateParams: Type.Optional(Type.Boolean()),
+      reconfigure: Type.Optional(Type.Boolean()),
+      confirmWrite: Type.Optional(Type.Boolean()),
+    }),
+    async execute(_toolCallId, params: ConfirmableParams & { profile?: string; configPath?: string; useEnv?: boolean; sessionId: string; actionId: string; sourceExecutionId: string; updateParams?: boolean; reconfigure?: boolean }, _signal, _onUpdate, ctx) {
+      if (!params.confirmWrite) {
+        if (!ctx.hasUI || !(await ctx.ui.confirm("Execute QDash agent action?", `Execute action '${params.actionId}' from execution '${params.sourceExecutionId}'?`))) {
+          throw new Error("qdash_execute_agent_action requires explicit confirmation");
+        }
+      }
+      const client = await makeClient(params);
+      return toToolResult(await client.executeAgentAction(params.sessionId, params.actionId, {
+        sourceExecutionId: params.sourceExecutionId,
+        updateParams: params.updateParams,
+        reconfigure: params.reconfigure,
+      }), { tool: "qdash_execute_agent_action" });
+    },
+  });
+
+  pi.registerTool({
     name: "qdash_commit_agent_candidate",
     label: "QDash Commit Agent Candidate",
     description: "Commit a QDash agent action candidate. This is a write operation and requires confirmation.",
@@ -1223,6 +1256,90 @@ export default function qdashExtension(pi: ExtensionAPI) {
       }
       const client = await makeClient(params);
       return toToolResult(await client.updateForumPost(params.postId, params.request as never), { tool: "qdash_update_forum_post" });
+    },
+  });
+
+  pi.registerTool({
+    name: "qdash_commit_agent_campaign_candidates",
+    label: "QDash Commit Agent Campaign Candidates",
+    description: "Commit multiple QDash agent campaign candidates. This is a write operation and requires confirmation.",
+    promptSnippet: "Commit multiple QDash agent candidates after explicit user confirmation",
+    promptGuidelines: ["Use qdash_commit_agent_campaign_candidates only after showing the candidate set and receiving explicit confirmation."],
+    parameters: Type.Object({
+      ...connectionParams,
+      sessionId: Type.String(),
+      candidates: Type.Array(Type.Any({ description: "Agent campaign candidate references accepted by QDash." })),
+      idempotencyKey: Type.Optional(Type.String()),
+      expectedStateVersion: Type.Number(),
+      confirmWrite: Type.Optional(Type.Boolean()),
+    }),
+    async execute(_toolCallId, params: ConfirmableParams & { profile?: string; configPath?: string; useEnv?: boolean; sessionId: string; candidates: unknown[]; idempotencyKey?: string; expectedStateVersion: number }, _signal, _onUpdate, ctx) {
+      if (!params.confirmWrite) {
+        if (!ctx.hasUI || !(await ctx.ui.confirm("Commit QDash agent campaign candidates?", `Commit ${params.candidates.length} candidate(s)?`))) {
+          throw new Error("qdash_commit_agent_campaign_candidates requires explicit confirmation");
+        }
+      }
+      const client = await makeClient(params);
+      return toToolResult(await client.commitAgentCampaignCandidates(params.sessionId, params.candidates as never, {
+        idempotencyKey: params.idempotencyKey ?? randomUUID(),
+        expectedStateVersion: params.expectedStateVersion,
+      }), { tool: "qdash_commit_agent_campaign_candidates" });
+    },
+  });
+
+  pi.registerTool({
+    name: "qdash_get_agent_candidate_commit",
+    label: "QDash Get Agent Candidate Commit",
+    description: "Get a QDash agent candidate commit by commitId.",
+    promptSnippet: "Get QDash agent candidate commit status",
+    promptGuidelines: ["Use qdash_get_agent_candidate_commit to inspect a candidate commit before applying it."],
+    parameters: Type.Object({ ...connectionParams, sessionId: Type.String(), commitId: Type.String() }),
+    async execute(_toolCallId, params: { profile?: string; configPath?: string; useEnv?: boolean; sessionId: string; commitId: string }) {
+      const client = await makeClient(params);
+      return toToolResult(await client.getAgentCandidateCommit(params.sessionId, params.commitId), { tool: "qdash_get_agent_candidate_commit" });
+    },
+  });
+
+  pi.registerTool({
+    name: "qdash_apply_agent_candidate_commit",
+    label: "QDash Apply Agent Candidate Commit",
+    description: "Apply a QDash agent candidate commit to backend configuration. This is a write operation and requires confirmation.",
+    promptSnippet: "Apply a QDash agent candidate commit after explicit user confirmation",
+    promptGuidelines: ["Use qdash_apply_agent_candidate_commit only after showing the commit and receiving explicit confirmation."],
+    parameters: Type.Object({
+      ...connectionParams,
+      sessionId: Type.String(),
+      commitId: Type.String(),
+      idempotencyKey: Type.Optional(Type.String()),
+      expectedStateVersion: Type.Number(),
+      pushToGithub: Type.Optional(Type.Boolean()),
+      confirmWrite: Type.Optional(Type.Boolean()),
+    }),
+    async execute(_toolCallId, params: ConfirmableParams & { profile?: string; configPath?: string; useEnv?: boolean; sessionId: string; commitId: string; idempotencyKey?: string; expectedStateVersion: number; pushToGithub?: boolean }, _signal, _onUpdate, ctx) {
+      if (!params.confirmWrite) {
+        if (!ctx.hasUI || !(await ctx.ui.confirm("Apply QDash agent candidate commit?", `Apply commit '${params.commitId}' to backend configuration?`))) {
+          throw new Error("qdash_apply_agent_candidate_commit requires explicit confirmation");
+        }
+      }
+      const client = await makeClient(params);
+      return toToolResult(await client.applyAgentCandidateCommit(params.sessionId, params.commitId, {
+        idempotencyKey: params.idempotencyKey ?? randomUUID(),
+        expectedStateVersion: params.expectedStateVersion,
+        pushToGithub: params.pushToGithub,
+      }), { tool: "qdash_apply_agent_candidate_commit" });
+    },
+  });
+
+  pi.registerTool({
+    name: "qdash_wait_agent_candidate_apply",
+    label: "QDash Wait Agent Candidate Apply",
+    description: "Wait for a QDash agent candidate commit apply operation to finish.",
+    promptSnippet: "Poll QDash until a candidate apply operation finishes",
+    promptGuidelines: ["Use qdash_wait_agent_candidate_apply after applying a candidate commit when the user wants polling."],
+    parameters: Type.Object({ ...connectionParams, sessionId: Type.String(), commitId: Type.String(), timeoutSeconds: Type.Optional(Type.Number()), pollIntervalSeconds: Type.Optional(Type.Number()) }),
+    async execute(_toolCallId, params: { profile?: string; configPath?: string; useEnv?: boolean; sessionId: string; commitId: string; timeoutSeconds?: number; pollIntervalSeconds?: number }) {
+      const client = await makeClient(params);
+      return toToolResult(await client.waitForAgentCandidateApply(params.sessionId, params.commitId, { timeoutSeconds: params.timeoutSeconds, pollIntervalSeconds: params.pollIntervalSeconds }), { tool: "qdash_wait_agent_candidate_apply" });
     },
   });
 
