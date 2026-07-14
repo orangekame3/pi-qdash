@@ -4,7 +4,19 @@ A pi extension for querying QDash from pi. It uses `@oqtopus-team/qdash-client` 
 
 ## Usage
 
-Install dependencies in this repository:
+Install from npm:
+
+```bash
+pi install npm:@orangekame3/pi-qdash
+```
+
+Try from npm without installing:
+
+```bash
+pi -e npm:@orangekame3/pi-qdash
+```
+
+For local development, install dependencies in this repository:
 
 ```bash
 npm install
