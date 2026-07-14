@@ -120,6 +120,11 @@ type QDashContextState = {
   profile?: string;
   chipId?: string;
   agentSessionId?: string;
+  qid?: string;
+  couplingId?: string;
+  taskName?: string;
+  lastExecutionId?: string;
+  lastTaskId?: string;
 };
 
 const CONTEXT_ENTRY_TYPE = "qdash-context";
@@ -149,7 +154,8 @@ function contextSummary(): string {
   const profile = currentContext.profile ?? "env/default";
   const chip = currentContext.chipId ?? "auto-chip";
   const session = currentContext.agentSessionId ? ` session:${shortId(currentContext.agentSessionId)}` : "";
-  return `qdash ${profile} ${chip}${session}`;
+  const target = currentContext.qid ? ` q${currentContext.qid}` : currentContext.couplingId ? ` c${currentContext.couplingId}` : "";
+  return `qdash ${profile} ${chip}${target}${session}`;
 }
 
 function contextStatusLine(theme?: Theme): string {
@@ -160,13 +166,16 @@ function contextStatusLine(theme?: Theme): string {
   const profile = currentContext.profile ?? (shouldUseEnv({}) ? "env" : "default");
   const chip = currentContext.chipId ?? "auto";
   const session = currentContext.agentSessionId ? shortId(currentContext.agentSessionId, 8) : "none";
+  const target = currentContext.qid ? `q${currentContext.qid}` : currentContext.couplingId ? `c${currentContext.couplingId}` : "none";
   const profileText = `${dim("profile")} ${success(profile)}`;
   const chipText = `${dim("chip")} ${currentContext.chipId ? success(chip) : warn(chip)}`;
+  const targetText = `${dim("target")} ${currentContext.qid || currentContext.couplingId ? success(target) : dim(target)}`;
   const sessionText = `${dim("agent")} ${currentContext.agentSessionId ? success(session) : dim(session)}`;
   return [
     `${accent("◆")} ${accent("QDash")}`,
     `👤 ${profileText}`,
     `${accent("▣")} ${chipText}`,
+    `🎯 ${targetText}`,
     `🤖 ${sessionText}`,
   ].join(dim("  │  "));
 }
@@ -174,7 +183,8 @@ function contextStatusLine(theme?: Theme): string {
 function isQDashContextState(value: unknown): value is QDashContextState {
   if (!value || typeof value !== "object") return false;
   const context = value as QDashContextState;
-  return [context.profile, context.chipId, context.agentSessionId].every((item) => item === undefined || typeof item === "string");
+  return [context.profile, context.chipId, context.agentSessionId, context.qid, context.couplingId, context.taskName, context.lastExecutionId, context.lastTaskId]
+    .every((item) => item === undefined || typeof item === "string");
 }
 
 function loadGlobalContext(): QDashContextState {
@@ -194,7 +204,7 @@ function saveGlobalContext(context: QDashContextState): void {
 
 function adoptContextFromToolInput(input: unknown): boolean {
   if (!input || typeof input !== "object") return false;
-  const params = input as { profile?: unknown; chipId?: unknown; sessionId?: unknown; useEnv?: unknown };
+  const params = input as { profile?: unknown; chipId?: unknown; sessionId?: unknown; qid?: unknown; couplingId?: unknown; taskName?: unknown; taskId?: unknown; executionId?: unknown; useEnv?: unknown };
   let changed = false;
 
   if (typeof params.profile === "string" && params.profile.trim()) {
@@ -217,6 +227,33 @@ function adoptContextFromToolInput(input: unknown): boolean {
 
   if (typeof params.sessionId === "string" && params.sessionId.trim() && currentContext.agentSessionId !== params.sessionId.trim()) {
     currentContext = { ...currentContext, agentSessionId: params.sessionId.trim() };
+    changed = true;
+  }
+
+  if (typeof params.qid === "string" && params.qid.trim() && currentContext.qid !== params.qid.trim()) {
+    const { couplingId: _couplingId, ...rest } = currentContext;
+    currentContext = { ...rest, qid: params.qid.trim() };
+    changed = true;
+  }
+
+  if (typeof params.couplingId === "string" && params.couplingId.trim() && currentContext.couplingId !== params.couplingId.trim()) {
+    const { qid: _qid, ...rest } = currentContext;
+    currentContext = { ...rest, couplingId: params.couplingId.trim() };
+    changed = true;
+  }
+
+  if (typeof params.taskName === "string" && params.taskName.trim() && currentContext.taskName !== params.taskName.trim()) {
+    currentContext = { ...currentContext, taskName: params.taskName.trim() };
+    changed = true;
+  }
+
+  if (typeof params.taskId === "string" && params.taskId.trim() && currentContext.lastTaskId !== params.taskId.trim()) {
+    currentContext = { ...currentContext, lastTaskId: params.taskId.trim() };
+    changed = true;
+  }
+
+  if (typeof params.executionId === "string" && params.executionId.trim() && currentContext.lastExecutionId !== params.executionId.trim()) {
+    currentContext = { ...currentContext, lastExecutionId: params.executionId.trim() };
     changed = true;
   }
 
@@ -364,6 +401,35 @@ function pathPart(value: string): string {
 function requireValue(value: string | undefined, name: string): string {
   if (!value) throw new Error(`${name} is required for this QDash action`);
   return value;
+}
+
+function qdashWebBaseUrl(client: QDashClient): string {
+  return client.config.baseUrl.replace(/\/api\/?$/, "").replace(/\/$/, "");
+}
+
+function qdashWebUrl(client: QDashClient, path: string): string {
+  return `${qdashWebBaseUrl(client)}${path.startsWith("/") ? path : `/${path}`}`;
+}
+
+function qdashObjectLinks(client: QDashClient, object: Record<string, unknown>): Record<string, string> {
+  const links: Record<string, string> = {};
+  const taskId = firstString(object, ["task_id", "taskId"]);
+  const executionId = firstString(object, ["execution_id", "executionId"]);
+  const postId = firstString(object, ["post_id", "forum_post_id", "id"]);
+  const sessionId = firstString(object, ["session_id", "sessionId"]);
+  if (taskId) links.task_result = qdashWebUrl(client, `/task-results/${encodeURIComponent(taskId)}`);
+  if (executionId) links.execution = qdashWebUrl(client, `/executions/${encodeURIComponent(executionId)}`);
+  if (postId) links.forum_post = qdashWebUrl(client, `/forum/posts/${encodeURIComponent(postId)}`);
+  if (sessionId) links.agent_session = qdashWebUrl(client, `/agent-sessions/${encodeURIComponent(sessionId)}`);
+  return links;
+}
+
+function withQDashLinks(client: QDashClient, data: unknown): unknown {
+  if (!data || typeof data !== "object" || Array.isArray(data)) return data;
+  const object = data as Record<string, unknown>;
+  const links = qdashObjectLinks(client, object);
+  if (Object.keys(links).length === 0) return data;
+  return { ...object, _links: links };
 }
 
 function safeConfig(client: QDashClient, source: string) {
@@ -642,6 +708,136 @@ function dashboardComponent(dashboard: Awaited<ReturnType<typeof buildDashboard>
   };
 }
 
+type RecentCalibrationSummary = {
+  context: { profile?: string; chipId: string; webBaseUrl: string };
+  items: Record<string, unknown>[];
+  groups: Array<{ target: string; status: string; summary: string; latest: Record<string, unknown>; links: Record<string, string> }>;
+};
+
+function calibrationTarget(item: Record<string, unknown>): string {
+  const qid = firstString(item, ["qid"]);
+  if (qid) return `q${qid}`;
+  const coupling = firstString(item, ["coupling_id", "couplingId"]);
+  if (coupling) return `c${coupling}`;
+  return "global";
+}
+
+function calibrationSummaryForTarget(items: Record<string, unknown>[]): { status: string; summary: string; latest: Record<string, unknown> } {
+  const latest = items[0] ?? {};
+  const latestTask = firstString(latest, ["task_name", "name"]) ?? "task";
+  const latestStatus = firstString(latest, ["status"]) ?? "unknown";
+  const latestMessage = firstString(latest, ["message"]);
+  const hadFailedRabi = items.some((item) => firstString(item, ["task_name", "name"]) === "CheckRabi" && firstString(item, ["status"]) === "failed");
+  const hasConfigure = items.some((item) => firstString(item, ["task_name", "name"]) === "Configure" && firstString(item, ["status"]) === "completed");
+  const latestIsSuccessfulRabi = latestTask === "CheckRabi" && latestStatus === "completed";
+  if (latestIsSuccessfulRabi && (hadFailedRabi || hasConfigure)) {
+    return { status: "recovered", summary: "CheckRabi completed after recovery sequence", latest };
+  }
+  if (latestStatus === "failed" && ["CheckChevron", "CheckQubitSpectroscopy"].includes(latestTask)) {
+    return { status: "blocked", summary: latestMessage ?? `${latestTask} failed; stop and review figures/settings`, latest };
+  }
+  if (latestStatus === "failed") return { status: "failed", summary: latestMessage ?? `${latestTask} failed`, latest };
+  if (latestStatus === "completed") return { status: "ok", summary: `${latestTask} completed`, latest };
+  return { status: latestStatus, summary: `${latestTask} ${latestStatus}`, latest };
+}
+
+async function buildRecentCalibrationSummary(params: { profile?: string; configPath?: string; useEnv?: boolean; chipId?: string; limit?: number; withinHours?: number }): Promise<RecentCalibrationSummary> {
+  params = applyQDashContext(params);
+  const client = await makeClient(params);
+  const chipId = await defaultChipId(client, params.chipId);
+  const end = new Date();
+  const start = new Date(end.getTime() - (params.withinHours ?? 24) * 3600_000);
+  const payload = await rawGet(client, "/task-results", { chip_id: chipId, start_from: start.toISOString(), start_to: end.toISOString(), limit: params.limit ?? 30 });
+  const items = arrayFromPayload(payload).filter((item): item is Record<string, unknown> => Boolean(item) && typeof item === "object");
+  const byTarget = new Map<string, Record<string, unknown>[]>();
+  for (const item of items) {
+    const target = calibrationTarget(item);
+    byTarget.set(target, [...(byTarget.get(target) ?? []), item]);
+  }
+  const groups = [...byTarget.entries()].map(([target, targetItems]) => {
+    const result = calibrationSummaryForTarget(targetItems);
+    return { target, ...result, links: qdashObjectLinks(client, result.latest) };
+  });
+  return { context: { profile: params.profile ?? currentContext.profile, chipId, webBaseUrl: qdashWebBaseUrl(client) }, items, groups };
+}
+
+function recentCalibrationSummaryLines(summary: RecentCalibrationSummary, color = false): string[] {
+  const accent = (text: string) => color ? ansi("1;36", text) : text;
+  const muted = (text: string) => color ? ansi("90", text) : text;
+  const statusMark = (status: string) => status === "recovered" || status === "ok" ? "✓" : status === "blocked" || status === "failed" ? "✗" : "•";
+  const body = [
+    `${muted("profile")} ${accent(summary.context.profile ?? "env/default")}  ${muted("chip")} ${accent(summary.context.chipId)}`,
+    `${muted("url")} ${summary.context.webBaseUrl}`,
+    "",
+    ...(summary.groups.length > 0 ? summary.groups.map((group) => {
+      const task = firstString(group.latest, ["task_name", "name"]);
+      const exec = firstString(group.latest, ["execution_id"]);
+      const taskUrl = group.links.task_result;
+      const execUrl = group.links.execution;
+      return [
+        `${statusMark(group.status)} ${accent(group.target)} ${muted(`[${group.status}]`)} ${task ? `${task}: ` : ""}${group.summary}`,
+        taskUrl ? `    ${muted("task")} ${taskUrl}` : undefined,
+        execUrl ? `    ${muted("exec")} ${execUrl}` : exec ? `    ${muted("exec")} ${exec}` : undefined,
+      ].filter(Boolean).join("\n");
+    }) : [muted("no recent calibration task results")]),
+  ];
+  return boxed("QDash Recent Calibration", body.flatMap((line) => line.split("\n")), color);
+}
+
+function recentCalibrationSummaryComponent(summary: RecentCalibrationSummary, theme: Theme) {
+  return {
+    render(width: number) {
+      return recentCalibrationSummaryLines(summary).map((line) => truncateToWidth(line, width));
+    },
+    invalidate() {},
+  };
+}
+
+type RecommendedNextAction = {
+  target: string;
+  recommendation: string;
+  reason: string;
+  status: string;
+  links: Record<string, string>;
+  latest?: Record<string, unknown>;
+};
+
+function recommendFromCalibrationSummary(summary: RecentCalibrationSummary, requestedTarget?: string): RecommendedNextAction[] {
+  const groups = requestedTarget ? summary.groups.filter((group) => group.target === requestedTarget || group.target === `q${requestedTarget}` || group.target === `c${requestedTarget}`) : summary.groups;
+  return groups.map((group) => {
+    const task = firstString(group.latest, ["task_name", "name"]);
+    const message = firstString(group.latest, ["message"]) ?? group.summary;
+    if (group.status === "recovered") {
+      return { target: group.target, status: "done", recommendation: "Inspect candidates; commit/apply only after explicit confirmation if this result should become authoritative.", reason: group.summary, links: group.links, latest: group.latest };
+    }
+    if (task === "CheckRabi" && group.status === "failed" && /non-finite|nan|R²|R2/i.test(message)) {
+      return { target: group.target, status: "next", recommendation: "Run CheckChevron. If it succeeds, run Configure, then validate with CheckRabi.", reason: message, links: group.links, latest: group.latest };
+    }
+    if (task === "CheckChevron" && group.status === "blocked") {
+      return { target: group.target, status: "stop", recommendation: "Stop automatic recovery; inspect figures and run/inspect CheckQubitSpectroscopy before Configure or Rabi retry.", reason: message, links: group.links, latest: group.latest };
+    }
+    if (task === "CheckQubitSpectroscopy" && group.status === "blocked") {
+      return { target: group.target, status: "human", recommendation: "Request human review; frequency detection is outside operating range and candidates are unsafe.", reason: message, links: group.links, latest: group.latest };
+    }
+    if (group.status === "blocked" || group.status === "failed") {
+      return { target: group.target, status: "review", recommendation: "Inspect task figures and recent history before another operational action.", reason: message, links: group.links, latest: group.latest };
+    }
+    return { target: group.target, status: "ok", recommendation: "No immediate recovery action suggested.", reason: group.summary, links: group.links, latest: group.latest };
+  });
+}
+
+function recommendationLines(recommendations: RecommendedNextAction[], color = false): string[] {
+  const accent = (text: string) => color ? ansi("1;36", text) : text;
+  const muted = (text: string) => color ? ansi("90", text) : text;
+  const mark = (status: string) => ["done", "ok"].includes(status) ? "✓" : ["stop", "human", "review"].includes(status) ? "✗" : "→";
+  return boxed("QDash Next Action", recommendations.length > 0 ? recommendations.flatMap((item) => [
+    `${mark(item.status)} ${accent(item.target)} ${muted(`[${item.status}]`)} ${item.recommendation}`,
+    `    ${muted("reason")} ${item.reason}`,
+    ...(item.links.task_result ? [`    ${muted("task")} ${item.links.task_result}`] : []),
+    ...(item.links.execution ? [`    ${muted("exec")} ${item.links.execution}`] : []),
+  ]) : [muted("no recent calibration target found")], color);
+}
+
 function forumPostsFromPayload(payload: unknown): Record<string, unknown>[] {
   if (Array.isArray(payload)) return payload.filter((item): item is Record<string, unknown> => Boolean(item) && typeof item === "object");
   if (payload && typeof payload === "object") {
@@ -661,15 +857,85 @@ function forumPostTitle(post: Record<string, unknown>): string {
   return firstString(post, ["title", "subject", "summary"]) ?? firstString(post, ["content", "body", "text"])?.slice(0, 60) ?? "(untitled)";
 }
 
+function firstNumber(object: Record<string, unknown>, keys: string[]): number | undefined {
+  for (const key of keys) {
+    const value = object[key];
+    if (typeof value === "number" && Number.isFinite(value)) return value;
+  }
+  return undefined;
+}
+
+function stringList(value: unknown): string[] {
+  return Array.isArray(value) ? value.filter((item): item is string => typeof item === "string" && item.length > 0) : [];
+}
+
 function forumPostLine(post: Record<string, unknown>): string {
-  const id = shortId(forumPostId(post), 18);
+  const number = firstNumber(post, ["number"]);
+  const id = shortId(forumPostId(post), 10);
   const title = forumPostTitle(post);
   const status = firstString(post, ["status"]);
   const category = firstString(post, ["category"]);
+  const targetType = firstString(post, ["target_type"]);
   const target = firstString(post, ["target_id", "chip_id", "task_id", "qid"]);
-  return ["•", id, title, category ? `[${category}]` : undefined, status ? `[${status}]` : undefined, target ? `(${target})` : undefined]
-    .filter(Boolean)
-    .join(" ");
+  const replies = firstNumber(post, ["reply_count"]);
+  const assignee = firstString(post, ["assignee_username", "username"]);
+  return [
+    "•",
+    number ? `#${number}` : id,
+    title,
+    category ? `[${category}]` : undefined,
+    status ? `[${status}]` : undefined,
+    target ? `(${targetType ? `${targetType}:` : ""}${target})` : undefined,
+    replies && replies > 0 ? `↩${replies}` : undefined,
+    assignee ? `@${assignee}` : undefined,
+  ].filter(Boolean).join(" ");
+}
+
+function inlineContentText(value: unknown): string {
+  if (typeof value === "string") return value;
+  if (!Array.isArray(value)) return "";
+  return value.map((item) => {
+    if (typeof item === "string") return item;
+    if (!item || typeof item !== "object") return "";
+    const object = item as Record<string, unknown>;
+    return typeof object.text === "string" ? object.text : "";
+  }).join("");
+}
+
+function forumBlockLines(blocks: unknown): string[] {
+  if (!Array.isArray(blocks)) return [];
+  const lines: string[] = [];
+  for (const item of blocks) {
+    if (!item || typeof item !== "object") continue;
+    const block = item as Record<string, unknown>;
+    const type = firstString(block, ["type"]) ?? "block";
+    const props = block.props && typeof block.props === "object" ? block.props as Record<string, unknown> : {};
+    const text = inlineContentText(block.content).trimEnd();
+    if (type === "heading") {
+      const level = firstNumber(props, ["level"]) ?? 2;
+      lines.push(`${"#".repeat(Math.max(1, Math.min(6, level)))} ${text}`.trimEnd());
+    } else if (type === "image") {
+      const name = firstString(props, ["name", "caption"]) ?? "image";
+      const url = firstString(props, ["url"]);
+      lines.push(`🖼 ${name}${url ? `  ${url}` : ""}`);
+    } else if (type === "bulletListItem") {
+      lines.push(`- ${text}`);
+    } else if (type === "numberedListItem") {
+      lines.push(`1. ${text}`);
+    } else if (text) {
+      lines.push(...text.split("\n"));
+    }
+    const childLines = forumBlockLines(block.children);
+    if (childLines.length > 0) lines.push(...childLines.map((line) => `  ${line}`));
+  }
+  return lines;
+}
+
+function forumContentLines(object: Record<string, unknown>): string[] {
+  const blockLines = forumBlockLines(object.content_blocks);
+  if (blockLines.length > 0) return blockLines;
+  const content = firstString(object, ["content", "body", "text", "message", "description"]);
+  return content ? content.split("\n") : ["(no content)"];
 }
 
 function forumListLines(payload: unknown, title = "QDash Forum", color = false): string[] {
@@ -684,25 +950,191 @@ function forumListLines(payload: unknown, title = "QDash Forum", color = false):
   ], color);
 }
 
-function forumDetailLines(post: unknown, title = "QDash Forum Post", color = false): string[] {
+function forumDetailBodyLines(post: unknown, color = false): string[] {
   const object = post && typeof post === "object" ? post as Record<string, unknown> : {};
   const accent = (text: string) => color ? ansi("1;36", text) : text;
   const muted = (text: string) => color ? ansi("90", text) : text;
-  const content = firstString(object, ["content", "body", "text", "message", "description"]);
-  return boxed(title, [
-    `${muted("id")} ${accent(forumPostId(object))}`,
-    `${muted("title")} ${forumPostTitle(object)}`,
-    firstString(object, ["status"]) ? `${muted("status")} ${firstString(object, ["status"])}` : undefined,
+  const labels = stringList(object.labels);
+  const replyCount = firstNumber(object, ["reply_count"]);
+  const meta = [
     firstString(object, ["category"]) ? `${muted("category")} ${firstString(object, ["category"])}` : undefined,
+    firstString(object, ["status"]) ? `${muted("status")} ${firstString(object, ["status"])}` : undefined,
+    firstString(object, ["target_type"]) || firstString(object, ["target_id"]) ? `${muted("target")} ${[firstString(object, ["target_type"]), firstString(object, ["target_id"])].filter(Boolean).join(":")}` : undefined,
+    firstString(object, ["chip_id"]) ? `${muted("chip")} ${firstString(object, ["chip_id"])}` : undefined,
+    replyCount !== undefined ? `${muted("replies")} ${replyCount}` : undefined,
+  ].filter((line): line is string => typeof line === "string");
+  return [
+    `${muted("id")} ${accent(forumPostId(object))}${firstNumber(object, ["number"]) ? `  ${muted("#")} ${firstNumber(object, ["number"])}` : ""}`,
+    `${muted("title")} ${forumPostTitle(object)}`,
+    `${muted("author")} ${firstString(object, ["username", "user_id"]) ?? "unknown"}${firstString(object, ["assignee_username"]) ? `  ${muted("assignee")} ${firstString(object, ["assignee_username"])}` : ""}`,
+    meta.join("  "),
+    labels.length > 0 ? `${muted("labels")} ${labels.map((label) => `#${label}`).join(" ")}` : undefined,
+    firstString(object, ["created_at"]) ? `${muted("created")} ${firstString(object, ["created_at"])}${firstString(object, ["updated_at"]) ? `  ${muted("updated")} ${firstString(object, ["updated_at"])}` : ""}` : undefined,
     "",
-    ...(content ? content.split("\n").slice(0, 8).map((line) => `  ${line}`) : ["  (no content)"]),
-  ].filter((line): line is string => typeof line === "string"), color);
+    ...forumContentLines(object).map((line) => `  ${line}`),
+  ].filter((line): line is string => typeof line === "string");
 }
 
-function textComponent(lines: string[], _theme: Theme) {
+function forumDetailLines(post: unknown, title = "QDash Forum Post", color = false): string[] {
+  return boxed(title, forumDetailBodyLines(post, color), color);
+}
+
+function wrapPlainLine(line: string, width: number): string[] {
+  if (width <= 0 || visibleWidth(line) <= width) return [line];
+  const output: string[] = [];
+  let rest = line;
+  while (visibleWidth(rest) > width) {
+    let slice = "";
+    for (const char of rest) {
+      if (visibleWidth(slice + char) > width) break;
+      slice += char;
+    }
+    output.push(slice);
+    rest = rest.slice(slice.length);
+  }
+  if (rest.length > 0) output.push(rest);
+  return output;
+}
+
+function boxLinesToWidth(title: string, body: string[], width: number, theme?: Theme): string[] {
+  const contentWidth = Math.max(24, Math.min(100, width - 4));
+  const border = (text: string) => theme ? theme.fg("borderMuted", text) : text;
+  const titleText = ` ${title} `;
+  const top = `${border("╭")}${theme ? theme.fg("accent", theme.bold(titleText)) : titleText}${border("─".repeat(Math.max(0, contentWidth + 2 - visibleWidth(titleText))))}${border("╮")}`;
+  const bottom = border(`╰${"─".repeat(contentWidth + 2)}╯`);
+  const rows = body.flatMap((line) => wrapPlainLine(line, contentWidth));
+  return [
+    top,
+    ...rows.map((line) => `${border("│")} ${padAnsi(truncateDisplay(line, contentWidth), contentWidth)} ${border("│")}`),
+    bottom,
+  ];
+}
+
+function textComponent(lines: string[], _theme: Theme, wrap = false) {
   return {
     render(width: number) {
-      return lines.map((line) => truncateToWidth(line, width));
+      if (!wrap) return lines.map((line) => truncateToWidth(line, width));
+      return lines.flatMap((line) => wrapPlainLine(line, width));
+    },
+    invalidate() {},
+  };
+}
+
+function forumDetailComponent(post: unknown, theme: Theme) {
+  return {
+    render(width: number) {
+      return boxLinesToWidth("QDash Forum Post", forumDetailBodyLines(post), width, theme);
+    },
+    invalidate() {},
+  };
+}
+
+type TimeseriesPoint = {
+  series: string;
+  value: number;
+  at?: string;
+  unit?: string;
+  taskId?: string;
+  executionId?: string;
+};
+
+function timeseriesPoints(payload: unknown): TimeseriesPoint[] {
+  const points: TimeseriesPoint[] = [];
+  const addPoint = (series: string, item: unknown) => {
+    if (!item || typeof item !== "object") return;
+    const object = item as Record<string, unknown>;
+    const value = object.value;
+    if (typeof value !== "number" || !Number.isFinite(value)) return;
+    points.push({
+      series,
+      value,
+      at: firstString(object, ["calibrated_at", "timestamp", "created_at", "start_at"]),
+      unit: firstString(object, ["unit"]),
+      taskId: firstString(object, ["task_id"]),
+      executionId: firstString(object, ["execution_id"]),
+    });
+  };
+  const visit = (value: unknown, series = "series") => {
+    if (Array.isArray(value)) {
+      for (const item of value) addPoint(series, item);
+      return;
+    }
+    if (!value || typeof value !== "object") return;
+    const object = value as Record<string, unknown>;
+    if ("value" in object) {
+      addPoint(series, object);
+      return;
+    }
+    for (const [key, nested] of Object.entries(object)) visit(nested, key);
+  };
+  if (payload && typeof payload === "object" && "data" in payload) visit((payload as Record<string, unknown>).data);
+  else visit(payload);
+  return points.sort((a, b) => (a.at ?? "").localeCompare(b.at ?? ""));
+}
+
+function formatNumber(value: number): string {
+  const abs = Math.abs(value);
+  if (abs >= 1000 || (abs > 0 && abs < 0.001)) return value.toExponential(2);
+  if (abs >= 100) return value.toFixed(1);
+  if (abs >= 10) return value.toFixed(3);
+  return value.toFixed(5).replace(/0+$/, "").replace(/\.$/, "");
+}
+
+function compactDate(value: string | undefined): string {
+  if (!value) return "";
+  const date = new Date(value.endsWith("Z") ? value : `${value}Z`);
+  if (Number.isNaN(date.getTime())) return value.slice(0, 10);
+  return `${String(date.getUTCMonth() + 1).padStart(2, "0")}/${String(date.getUTCDate()).padStart(2, "0")} ${String(date.getUTCHours()).padStart(2, "0")}:${String(date.getUTCMinutes()).padStart(2, "0")}`;
+}
+
+function samplePoints(points: TimeseriesPoint[], width: number): TimeseriesPoint[] {
+  if (points.length <= width) return points;
+  const sampled: TimeseriesPoint[] = [];
+  for (let i = 0; i < width; i++) sampled.push(points[Math.round(i * (points.length - 1) / (width - 1))]);
+  return sampled;
+}
+
+function plotSeriesLines(points: TimeseriesPoint[], options: { title: string; height?: number; width?: number; color?: boolean }): string[] {
+  const height = Math.max(3, Math.min(20, options.height ?? 8));
+  const plotWidth = Math.max(8, Math.min(100, options.width ?? 60));
+  const accent = (text: string) => options.color ? ansi("1;36", text) : text;
+  const muted = (text: string) => options.color ? ansi("90", text) : text;
+  if (points.length === 0) return boxed(options.title, [muted("no numeric data")], options.color);
+
+  const sampled = samplePoints(points, plotWidth);
+  const values = sampled.map((point) => point.value);
+  const min = Math.min(...values);
+  const max = Math.max(...values);
+  const span = max - min || 1;
+  const grid = Array.from({ length: height }, () => Array.from({ length: sampled.length }, () => " "));
+  sampled.forEach((point, col) => {
+    const row = height - 1 - Math.round((point.value - min) / span * (height - 1));
+    grid[Math.max(0, Math.min(height - 1, row))][col] = "●";
+  });
+  const yLabelWidth = Math.max(formatNumber(max).length, formatNumber(min).length, 6);
+  const rows = grid.map((row, index) => {
+    const value = max - (span * index / (height - 1));
+    return `${formatNumber(value).padStart(yLabelWidth)} ┤${row.join("")}`;
+  });
+  const unit = points.find((point) => point.unit)?.unit;
+  const first = points[0];
+  const last = points[points.length - 1];
+  const body = [
+    `${muted("series")} ${accent([...new Set(points.map((point) => point.series))].join(", "))}${unit ? `  ${muted("unit")} ${unit}` : ""}`,
+    `${muted("count")} ${points.length}  ${muted("min")} ${formatNumber(Math.min(...points.map((point) => point.value)))}  ${muted("max")} ${formatNumber(Math.max(...points.map((point) => point.value)))}  ${muted("last")} ${formatNumber(last.value)}`,
+    `${muted("range")} ${compactDate(first.at)} → ${compactDate(last.at)}`,
+    "",
+    ...rows,
+    `${" ".repeat(yLabelWidth)} └${"─".repeat(sampled.length)}`,
+  ];
+  return boxed(options.title, body, options.color);
+}
+
+function timeseriesPlotComponent(data: unknown, title: string, theme: Theme) {
+  return {
+    render(width: number) {
+      const points = timeseriesPoints(data);
+      return plotSeriesLines(points, { title, width: Math.max(8, width - 16) }).map((line) => truncateToWidth(line, width));
     },
     invalidate() {},
   };
@@ -857,7 +1289,8 @@ export default function qdashExtension(pi: ExtensionAPI) {
     parameters: querySchema,
     async execute(_toolCallId, params: QDashQueryParams) {
       const data = await executeQuery(params);
-      return toToolResult(data, { action: params.action });
+      const client = await makeClient(params);
+      return toToolResult(withQDashLinks(client, data), { action: params.action, webBaseUrl: qdashWebBaseUrl(client) });
     },
   });
 
@@ -881,7 +1314,8 @@ export default function qdashExtension(pi: ExtensionAPI) {
       parameters: tool.parameters,
       async execute(_toolCallId, params: Omit<QDashQueryParams, "action">) {
         const data = await executeQuery({ ...params, action: tool.action });
-        return toToolResult(data, { action: tool.action, tool: tool.name });
+        const client = await makeClient(params);
+        return toToolResult(withQDashLinks(client, data), { action: tool.action, tool: tool.name, webBaseUrl: qdashWebBaseUrl(client) });
       },
     });
   };
@@ -946,6 +1380,42 @@ export default function qdashExtension(pi: ExtensionAPI) {
       qid: Type.Optional(Type.String()),
       tag: Type.Optional(Type.String()),
     }),
+  });
+
+  pi.registerTool({
+    name: "qdash_plot_timeseries",
+    label: "QDash Plot Timeseries",
+    description: "Render a compact TUI sparkline/plot for a task-result parameter timeseries.",
+    promptSnippet: "Plot QDash task-result timeseries in the TUI",
+    promptGuidelines: ["Use qdash_plot_timeseries when the user wants to visualize history, drift, trends, or analysis timeseries in the TUI."],
+    parameters: Type.Object({
+      ...connectionParams,
+      ...chipScopedParams,
+      parameter: Type.String(),
+      startAt: Type.Optional(Type.String({ description: "Start timestamp, preferably UTC ISO with Z. Defaults to withinHours ago." })),
+      endAt: Type.Optional(Type.String({ description: "End timestamp, preferably UTC ISO with Z. Defaults to now." })),
+      withinHours: Type.Optional(Type.Number({ description: "Lookback window when startAt is omitted. Defaults to 168 hours." })),
+      qid: Type.Optional(Type.String()),
+      tag: Type.Optional(Type.String()),
+      height: Type.Optional(Type.Number()),
+      width: Type.Optional(Type.Number()),
+      color: Type.Optional(Type.Boolean({ description: "Emit ANSI colors in text output for terminal display." })),
+    }),
+    async execute(_toolCallId, params: { profile?: string; configPath?: string; useEnv?: boolean; chipId?: string; parameter: string; startAt?: string; endAt?: string; withinHours?: number; qid?: string; tag?: string; height?: number; width?: number; color?: boolean }) {
+      const client = await makeClient(params);
+      const endAt = params.endAt ?? new Date().toISOString();
+      const startAt = params.startAt ?? new Date(Date.parse(endAt) - (params.withinHours ?? 168) * 3600_000).toISOString();
+      const chipId = await defaultChipId(client, params.chipId);
+      const data = await client.getTaskResultsTimeseries({ chipId, parameter: params.parameter, tag: params.tag, qid: params.qid, startAt, endAt });
+      const title = `QDash Timeseries: ${params.parameter}${params.qid ? ` q${params.qid}` : ""}`;
+      const text = plotSeriesLines(timeseriesPoints(data), { title, height: params.height, width: params.width, color: params.color }).join("\n");
+      return toTextToolResult(text, data, { tool: "qdash_plot_timeseries", parameter: params.parameter, qid: params.qid, chipId, startAt, endAt });
+    },
+    renderResult(result, _options, theme) {
+      const details = result.details as { data?: unknown; parameter?: string; qid?: string } | undefined;
+      const title = `QDash Timeseries: ${details?.parameter ?? "parameter"}${details?.qid ? ` q${details.qid}` : ""}`;
+      return timeseriesPlotComponent(details?.data, title, theme);
+    },
   });
 
   registerQueryTool({
@@ -1325,11 +1795,12 @@ export default function qdashExtension(pi: ExtensionAPI) {
     async execute(_toolCallId, params: { profile?: string; configPath?: string; useEnv?: boolean; postId: string; color?: boolean }) {
       const client = await makeClient(params);
       const data = await client.getForumPost(params.postId);
-      return toTextToolResult(forumDetailLines(data, "QDash Forum Post", params.color).join("\n"), data, { tool: "qdash_get_forum_post" });
+      const url = qdashWebUrl(client, `/forum/posts/${encodeURIComponent(params.postId)}`);
+      return toTextToolResult(`${forumDetailLines(data, "QDash Forum Post", params.color).join("\n")}\nurl ${url}`, withQDashLinks(client, data), { tool: "qdash_get_forum_post", url });
     },
     renderResult(result, _options, theme) {
       const data = (result.details as { data?: unknown } | undefined)?.data;
-      return textComponent(forumDetailLines(data, "QDash Forum Post"), theme);
+      return forumDetailComponent(data, theme);
     },
   });
 
@@ -1343,11 +1814,12 @@ export default function qdashExtension(pi: ExtensionAPI) {
     async execute(_toolCallId, params: { profile?: string; configPath?: string; useEnv?: boolean; postId: string; color?: boolean }) {
       const client = await makeClient(params);
       const data = await client.getForumPostReplies(params.postId);
-      return toTextToolResult(forumListLines(data, "QDash Forum Replies", params.color).join("\n"), data, { tool: "qdash_list_forum_replies" });
+      const url = qdashWebUrl(client, `/forum/posts/${encodeURIComponent(params.postId)}`);
+      return toTextToolResult(`${forumListLines(data, "QDash Forum Replies", params.color).join("\n")}\nurl ${url}`, data, { tool: "qdash_list_forum_replies", url });
     },
     renderResult(result, _options, theme) {
       const data = (result.details as { data?: unknown } | undefined)?.data;
-      return textComponent(forumListLines(data, "QDash Forum Replies"), theme);
+      return textComponent(forumListLines(data, "QDash Forum Replies"), theme, true);
     },
   });
 
@@ -1579,6 +2051,56 @@ export default function qdashExtension(pi: ExtensionAPI) {
   });
 
   pi.registerTool({
+    name: "qdash_recent_calibration_summary",
+    label: "QDash Recent Calibration Summary",
+    description: "Summarize recent calibration task outcomes with QDash Web UI links.",
+    promptSnippet: "Summarize recent QDash calibration results and return task/execution URLs",
+    promptGuidelines: ["Use qdash_recent_calibration_summary when the user asks for recent calibration results, what happened, or quick links to details."],
+    parameters: Type.Object({
+      ...connectionParams,
+      chipId: Type.Optional(Type.String()),
+      limit: Type.Optional(Type.Number()),
+      withinHours: Type.Optional(Type.Number()),
+      color: Type.Optional(Type.Boolean({ description: "Emit ANSI colors in text output for terminal display." })),
+    }),
+    async execute(_toolCallId, params: { profile?: string; configPath?: string; useEnv?: boolean; chipId?: string; limit?: number; withinHours?: number; color?: boolean }) {
+      const summary = await buildRecentCalibrationSummary(params);
+      return toTextToolResult(recentCalibrationSummaryLines(summary, params.color).join("\n"), summary, { tool: "qdash_recent_calibration_summary", webBaseUrl: summary.context.webBaseUrl });
+    },
+    renderResult(result, _options, theme) {
+      const summary = (result.details as { data?: RecentCalibrationSummary } | undefined)?.data;
+      return summary ? recentCalibrationSummaryComponent(summary, theme) : textComponent(["No calibration summary"], theme);
+    },
+  });
+
+  pi.registerTool({
+    name: "qdash_recommend_next_action",
+    label: "QDash Recommend Next Action",
+    description: "Recommend the next safe calibration action from recent task outcomes and current target context.",
+    promptSnippet: "Recommend the next QDash calibration action",
+    promptGuidelines: ["Use qdash_recommend_next_action before continuing autonomous calibration after a failed or completed calibration task."],
+    parameters: Type.Object({
+      ...connectionParams,
+      chipId: Type.Optional(Type.String()),
+      qid: Type.Optional(Type.String()),
+      couplingId: Type.Optional(Type.String()),
+      limit: Type.Optional(Type.Number()),
+      withinHours: Type.Optional(Type.Number()),
+      color: Type.Optional(Type.Boolean({ description: "Emit ANSI colors in text output for terminal display." })),
+    }),
+    async execute(_toolCallId, params: { profile?: string; configPath?: string; useEnv?: boolean; chipId?: string; qid?: string; couplingId?: string; limit?: number; withinHours?: number; color?: boolean }) {
+      const summary = await buildRecentCalibrationSummary(params);
+      const target = params.qid ?? currentContext.qid ?? params.couplingId ?? currentContext.couplingId;
+      const recommendations = recommendFromCalibrationSummary(summary, target);
+      return toTextToolResult(recommendationLines(recommendations, params.color).join("\n"), { recommendations, summary }, { tool: "qdash_recommend_next_action", webBaseUrl: summary.context.webBaseUrl });
+    },
+    renderResult(result, _options, theme) {
+      const recommendations = ((result.details as { data?: { recommendations?: RecommendedNextAction[] } } | undefined)?.data?.recommendations) ?? [];
+      return textComponent(recommendationLines(recommendations).join("\n").split("\n"), theme);
+    },
+  });
+
+  pi.registerTool({
     name: "qdash_triage_overview",
     label: "QDash Triage Overview",
     description: "Create a read-only triage overview from open issues and failed task results for the current QDash context.",
@@ -1727,6 +2249,27 @@ export default function qdashExtension(pi: ExtensionAPI) {
     },
   });
 
+  pi.registerCommand("qdash-use-target", {
+    description: "Set the current QDash calibration target; usage: /qdash-use-target qid <qid> | coupling <coupling_id>",
+    handler: async (args, ctx) => {
+      const [kind, value] = args.trim().split(/\s+/).filter(Boolean);
+      if (!kind || !value || !["qid", "q", "qubit", "coupling", "c"].includes(kind)) {
+        ctx.ui.notify("Usage: /qdash-use-target qid <qid> | coupling <coupling_id>", "warning");
+        return;
+      }
+      if (["qid", "q", "qubit"].includes(kind)) {
+        const { couplingId: _couplingId, ...rest } = currentContext;
+        currentContext = { ...rest, qid: value };
+      } else {
+        const { qid: _qid, ...rest } = currentContext;
+        currentContext = { ...rest, couplingId: value };
+      }
+      persistContext();
+      refreshContextUi(ctx);
+      ctx.ui.notify(`QDash target set to ${currentContext.qid ? `q${currentContext.qid}` : `c${currentContext.couplingId}`}`, "info");
+    },
+  });
+
   pi.registerCommand("qdash-use-agent-session", {
     description: "Set the current QDash agent session ID for this pi session",
     handler: async (args, ctx) => {
@@ -1783,6 +2326,10 @@ export default function qdashExtension(pi: ExtensionAPI) {
         "QDash Context",
         `profile ${currentContext.profile ?? "env/default"}`,
         `chip ${currentContext.chipId ?? "auto-chip"}`,
+        `target ${currentContext.qid ? `q${currentContext.qid}` : currentContext.couplingId ? `c${currentContext.couplingId}` : "none"}`,
+        `task ${currentContext.taskName ?? "none"}`,
+        `last execution ${currentContext.lastExecutionId ?? "none"}`,
+        `last task ${currentContext.lastTaskId ?? "none"}`,
         `agent session ${currentContext.agentSessionId ?? "none"}`,
       ]);
       ctx.ui.notify(contextSummary(), "info");

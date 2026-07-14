@@ -13,7 +13,7 @@ Use the pi-qdash tools instead of scraping the UI or hand-writing auth headers.
 2. Prefer dedicated read-only tools when they match the task:
    - `qdash_list_chips`, `qdash_get_default_chip`
    - `qdash_get_chip_metrics`, `qdash_list_chip_qubits`, `qdash_list_chip_couplings`
-   - `qdash_get_timeseries`
+   - `qdash_get_timeseries`, `qdash_plot_timeseries`
    - `qdash_list_task_results`, `qdash_get_task_result`
    - `qdash_list_issues`
    - `qdash_list_flows`, `qdash_get_flow`
@@ -23,6 +23,8 @@ Use the pi-qdash tools instead of scraping the UI or hand-writing auth headers.
    - `qdash_get_figure`, `qdash_get_task_figures`
 3. Use harness overview tools for status and triage:
    - `qdash_dashboard`
+   - `qdash_recent_calibration_summary`
+   - `qdash_recommend_next_action`
    - `qdash_triage_overview`
 4. Use agent calibration workflow tools when the user explicitly wants an agent workflow:
    - `qdash_create_agent_session`
@@ -53,6 +55,7 @@ Use these commands to make pi behave like a QDash-specific harness with persiste
 ```text
 /qdash-use-profile <profile>
 /qdash-use-chip [chip_id]
+/qdash-use-target qid <qid> | coupling <coupling_id>
 /qdash-use-agent-session <session_id>
 /qdash-context
 /qdash-dashboard [limit]
