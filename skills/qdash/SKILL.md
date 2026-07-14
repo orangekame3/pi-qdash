@@ -87,7 +87,9 @@ When the user wants to preserve an investigated observation in QDash forum/notes
 3. Prefer replying to an existing target/coupling forum thread when one exists.
 4. Use `qdash_create_forum_evidence_reply` for task-result evidence so figures are embedded as QDash UI image blocks (`/api/executions/figure?path=...`) and visible in the forum.
 5. Include task and execution QDash Web URLs in the reply.
-6. Ask for confirmation before creating/updating the forum post.
+6. When mentioning history or trends, include links to representative historical task results.
+7. Mark agent-authored evidence with a footer such as `— by pi-qdash`.
+8. Ask for confirmation before creating/updating the forum post.
 
 ## Safety
 

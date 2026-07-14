@@ -973,6 +973,8 @@ type ForumEvidenceReplyParams = {
   title?: string;
   includeFigures?: boolean;
   maxFigures?: number;
+  includeHistory?: boolean;
+  historyLimit?: number;
 };
 
 function filenameFromFigurePath(path: string): string {
@@ -1008,6 +1010,23 @@ async function buildForumEvidenceReply(client: QDashClient, params: ForumEvidenc
   const executionUrl = executionId ? qdashWebUrl(client, `/executions/${encodeURIComponent(executionId)}`) : undefined;
   const figures = params.includeFigures === false ? [] : taskFigurePaths(task, params.maxFigures ?? 2);
   const figureMarkdown = figures.map((path) => `![${filenameFromFigurePath(path)}](${figureApiUrl(path)})`).join("\n\n");
+  const history = params.includeHistory === false ? [] : arrayFromPayload(await client.listTaskResults({
+    chipId,
+    taskName,
+    qid,
+    couplingId,
+    limit: params.historyLimit ?? 5,
+  })).filter((item): item is Record<string, unknown> => Boolean(item) && typeof item === "object");
+  const historyLines = history
+    .filter((item) => firstString(item, ["task_id", "taskId"]) !== params.taskId)
+    .slice(0, Math.max(0, (params.historyLimit ?? 5) - 1))
+    .map((item) => {
+      const historyTaskId = firstString(item, ["task_id", "taskId"]);
+      const status = firstString(item, ["status"]) ?? "unknown";
+      const start = firstString(item, ["start_at", "startAt"])?.slice(0, 16) ?? "time unknown";
+      const msg = firstString(item, ["message"]);
+      return historyTaskId ? `- ${start} ${status}: [${historyTaskId}](${qdashWebUrl(client, `/task-results/${encodeURIComponent(historyTaskId)}`)})${msg ? ` — ${msg}` : ""}` : undefined;
+    }).filter((line): line is string => Boolean(line));
   const content = [
     `## ${title}`,
     "",
@@ -1017,8 +1036,11 @@ async function buildForumEvidenceReply(client: QDashClient, params: ForumEvidenc
     ...(executionUrl ? [`- [execution](${executionUrl})`] : []),
     ...(message ? [`- message: \`${message}\``] : []),
     ...(figures.length > 0 ? ["", figureMarkdown] : []),
+    ...(historyLines.length > 0 ? ["", `### Recent ${taskName} history`, "", ...historyLines] : []),
     "",
     params.interpretation,
+    "",
+    "— by pi-qdash",
   ].join("\n");
   // Keep content_blocks empty so QDash renders the markdown `content` directly.
   // The current forum UI reliably renders markdown links and images, while BlockNote
@@ -2060,9 +2082,11 @@ export default function qdashExtension(pi: ExtensionAPI) {
       title: Type.Optional(Type.String()),
       includeFigures: Type.Optional(Type.Boolean()),
       maxFigures: Type.Optional(Type.Number()),
+      includeHistory: Type.Optional(Type.Boolean()),
+      historyLimit: Type.Optional(Type.Number()),
       confirmWrite: Type.Optional(Type.Boolean()),
     }),
-    async execute(_toolCallId, params: ConfirmableParams & { profile?: string; configPath?: string; useEnv?: boolean; parentPostId: string; taskId: string; interpretation: string; title?: string; includeFigures?: boolean; maxFigures?: number }, _signal, _onUpdate, ctx) {
+    async execute(_toolCallId, params: ConfirmableParams & { profile?: string; configPath?: string; useEnv?: boolean; parentPostId: string; taskId: string; interpretation: string; title?: string; includeFigures?: boolean; maxFigures?: number; includeHistory?: boolean; historyLimit?: number }, _signal, _onUpdate, ctx) {
       const client = await makeClient(params);
       const built = await buildForumEvidenceReply(client, params);
       if (!params.confirmWrite) {
