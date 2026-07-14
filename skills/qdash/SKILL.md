@@ -19,7 +19,14 @@ Use the pi-qdash tools instead of scraping the UI or hand-writing auth headers.
    - `qdash_list_flows`, `qdash_get_flow`
    - `qdash_list_executions`, `qdash_get_execution`
    - `qdash_list_ai_reviews`, `qdash_get_provenance_stats`
-3. Use `qdash_query` for common read-only QDash operations not covered by a dedicated tool:
+3. Use agent calibration workflow tools when the user explicitly wants an agent workflow:
+   - `qdash_create_agent_session`
+   - `qdash_get_agent_session`
+   - `qdash_submit_agent_action`
+   - `qdash_get_agent_action`, `qdash_list_agent_actions`, `qdash_wait_agent_action`
+   - `qdash_list_agent_action_candidates`
+   - `qdash_commit_agent_candidate`
+4. Use `qdash_query` for common read-only QDash operations not covered by a dedicated tool:
    - `chips`, `default_chip`, `metrics_config`, `chip_metrics`
    - `chip_qubits`, `chip_qubit`, `chip_couplings`, `chip_coupling`
    - `timeseries`, `task_results`, `task_result`, `task_note`, `task_result_issues`
@@ -30,7 +37,7 @@ Use the pi-qdash tools instead of scraping the UI or hand-writing auth headers.
    - `flows`, `flow`, `flow_templates`, `flow_template`, `flow_helper_files`, `flow_helper_file`
    - `executions`, `execution`, `ai_reviews`, `ai_review_runs`, `ai_review_run`
    - `forum_posts`, `provenance_stats`, `provenance_history`, `provenance_changes`, `provenance_lineage`, `provenance_impact`
-4. `qdash_raw_get` — read-only GET endpoints not covered by `qdash_query`.
+5. `qdash_raw_get` — read-only GET endpoints not covered by `qdash_query`.
 
 ## Configuration
 
@@ -46,5 +53,6 @@ If `QDASH_BASE_URL` is set and no profile is specified, the tools default to env
 ## Safety
 
 - Never print tokens, passwords, Cloudflare Access secrets, or full profile contents.
-- Treat write/operational endpoints (flow execute, git push/pull, re-execute, admin/auth APIs) as sensitive and ask the user before any write workflow.
+- Treat write/operational endpoints (agent session/action creation, candidate commits, flow execute, git push/pull, re-execute, admin/auth APIs) as sensitive and ask the user before any write workflow.
+- Set `confirmWrite: true` only after explicit user confirmation. In interactive pi, let the tool ask for confirmation when possible.
 - Prefer summarizing large responses with counts, IDs, time ranges, and notable values.

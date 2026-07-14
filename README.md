@@ -52,10 +52,17 @@ pi install git:github.com/orangekame3/pi-qdash
   - `qdash_list_flows`, `qdash_get_flow`
   - `qdash_list_executions`, `qdash_get_execution`
   - `qdash_list_ai_reviews`, `qdash_get_provenance_stats`
+- Agent calibration workflow tools:
+  - `qdash_create_agent_session`
+  - `qdash_get_agent_session`
+  - `qdash_submit_agent_action`
+  - `qdash_get_agent_action`, `qdash_list_agent_actions`, `qdash_wait_agent_action`
+  - `qdash_list_agent_action_candidates`
+  - `qdash_commit_agent_candidate`
 - `qdash_query`: fallback for read-only queries that do not yet have a dedicated tool
 - `qdash_raw_get`: call read-only GET endpoints not covered by `qdash_query` through the qdash-client transport
 
-Secrets such as `api_token`, passwords, and Cloudflare Access secrets are redacted from tool output.
+Secrets such as `api_token`, passwords, and Cloudflare Access secrets are redacted from tool output. Write-oriented agent workflow tools require explicit confirmation via UI or `confirmWrite: true`.
 
 ## Skill
 

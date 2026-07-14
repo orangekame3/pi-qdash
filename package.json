@@ -1,6 +1,6 @@
 {
   "name": "@orangekame3/pi-qdash",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "description": "Pi extension for querying QDash via @oqtopus-team/qdash-client",
   "type": "module",
   "license": "Apache-2.0",
@@ -12,6 +12,10 @@
   "homepage": "https://github.com/orangekame3/pi-qdash#readme",
   "bugs": "https://github.com/orangekame3/pi-qdash/issues",
   "keywords": ["pi-package", "pi-extension", "qdash"],
+  "files": [
+    "extensions",
+    "skills"
+  ],
   "publishConfig": {
     "access": "public"
   },

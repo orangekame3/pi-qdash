@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import { existsSync, readFileSync } from "node:fs";
 
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
@@ -94,6 +95,10 @@ type RawGetParams = {
   useEnv?: boolean;
   path: string;
   query?: Record<string, string | number | boolean | null | undefined>;
+};
+
+type ConfirmableParams = {
+  confirmWrite?: boolean;
 };
 
 const QueryAction = Type.Union([
@@ -534,6 +539,219 @@ export default function qdashExtension(pi: ExtensionAPI) {
     promptSnippet: "List QDash task-result AI reviews",
     action: "ai_reviews",
     parameters: Type.Object({ ...connectionParams, chipId: Type.Optional(Type.String()), taskName: Type.Optional(Type.String()), status: Type.Optional(Type.String()), decision: Type.Optional(Type.String()), latestOnly: Type.Optional(Type.Boolean()), limit: Type.Optional(Type.Number()), skip: Type.Optional(Type.Number()) }),
+  });
+
+  pi.registerTool({
+    name: "qdash_create_agent_session",
+    label: "QDash Create Agent Session",
+    description: "Create a QDash agent calibration session. This is a write operation and requires confirmation.",
+    promptSnippet: "Create a QDash agent calibration session after explicit user confirmation",
+    promptGuidelines: [
+      "Use qdash_create_agent_session only after the user explicitly asks to start an agent calibration workflow.",
+      "qdash_create_agent_session is a write operation; set confirmWrite only after user confirmation.",
+    ],
+    parameters: Type.Object({
+      ...connectionParams,
+      ...chipScopedParams,
+      policy: Type.Any({ description: "Agent session policy object accepted by QDash." }),
+      expiresInSeconds: Type.Optional(Type.Number()),
+      skillName: Type.Optional(Type.String()),
+      skillVersion: Type.Optional(Type.String()),
+      skillHash: Type.Optional(Type.String()),
+      modelName: Type.Optional(Type.String()),
+      confirmWrite: Type.Optional(Type.Boolean({ description: "Required for non-interactive execution. Set true only after explicit user confirmation." })),
+    }),
+    async execute(_toolCallId, params: ConfirmableParams & {
+      profile?: string;
+      configPath?: string;
+      useEnv?: boolean;
+      chipId?: string;
+      policy: unknown;
+      expiresInSeconds?: number;
+      skillName?: string;
+      skillVersion?: string;
+      skillHash?: string;
+      modelName?: string;
+    }, _signal, _onUpdate, ctx) {
+      if (!params.confirmWrite) {
+        if (!ctx.hasUI || !(await ctx.ui.confirm("Create QDash agent session?", "This will create an agent session in QDash."))) {
+          throw new Error("qdash_create_agent_session requires explicit confirmation");
+        }
+      }
+      const client = await makeClient(params);
+      const chipId = await defaultChipId(client, params.chipId);
+      const data = await client.createAgentSession({
+        chipId,
+        policy: params.policy as never,
+        expiresInSeconds: params.expiresInSeconds,
+        skillName: params.skillName ?? "pi-qdash",
+        skillVersion: params.skillVersion,
+        skillHash: params.skillHash,
+        modelName: params.modelName,
+      });
+      return toToolResult(data, { tool: "qdash_create_agent_session", chipId });
+    },
+  });
+
+  pi.registerTool({
+    name: "qdash_get_agent_session",
+    label: "QDash Get Agent Session",
+    description: "Get a QDash agent calibration session by sessionId.",
+    promptSnippet: "Get QDash agent calibration session details",
+    promptGuidelines: ["Use qdash_get_agent_session to inspect QDash agent session state."],
+    parameters: Type.Object({ ...connectionParams, sessionId: Type.String() }),
+    async execute(_toolCallId, params: { profile?: string; configPath?: string; useEnv?: boolean; sessionId: string }) {
+      const client = await makeClient(params);
+      return toToolResult(await client.getAgentSession(params.sessionId), { tool: "qdash_get_agent_session" });
+    },
+  });
+
+  pi.registerTool({
+    name: "qdash_submit_agent_action",
+    label: "QDash Submit Agent Action",
+    description: "Submit an action to a QDash agent session. This is a write operation and requires confirmation.",
+    promptSnippet: "Submit an action to a QDash agent session after explicit user confirmation",
+    promptGuidelines: [
+      "Use qdash_submit_agent_action only after the user confirms the exact agent action.",
+      "Set confirmWrite only after explicit user confirmation.",
+    ],
+    parameters: Type.Object({
+      ...connectionParams,
+      sessionId: Type.String(),
+      idempotencyKey: Type.Optional(Type.String()),
+      expectedStateVersion: Type.Number(),
+      actionType: Type.String(),
+      taskName: Type.Optional(Type.String()),
+      qids: Type.Optional(Type.Array(Type.String())),
+      parameterOverrides: Type.Optional(Type.Record(Type.String(), Type.Number())),
+      diagnosis: Type.Optional(Type.String()),
+      confirmWrite: Type.Optional(Type.Boolean()),
+    }),
+    async execute(_toolCallId, params: ConfirmableParams & {
+      profile?: string;
+      configPath?: string;
+      useEnv?: boolean;
+      sessionId: string;
+      idempotencyKey?: string;
+      expectedStateVersion: number;
+      actionType: string;
+      taskName?: string;
+      qids?: string[];
+      parameterOverrides?: Record<string, number>;
+      diagnosis?: string;
+    }, _signal, _onUpdate, ctx) {
+      if (!params.confirmWrite) {
+        if (!ctx.hasUI || !(await ctx.ui.confirm("Submit QDash agent action?", `Submit action '${params.actionType}' to session '${params.sessionId}'?`))) {
+          throw new Error("qdash_submit_agent_action requires explicit confirmation");
+        }
+      }
+      const client = await makeClient(params);
+      const data = await client.submitAgentAction(params.sessionId, {
+        idempotencyKey: params.idempotencyKey ?? randomUUID(),
+        expectedStateVersion: params.expectedStateVersion,
+        actionType: params.actionType as never,
+        taskName: params.taskName,
+        qids: params.qids,
+        parameterOverrides: params.parameterOverrides,
+        diagnosis: params.diagnosis,
+      });
+      return toToolResult(data, { tool: "qdash_submit_agent_action" });
+    },
+  });
+
+  pi.registerTool({
+    name: "qdash_get_agent_action",
+    label: "QDash Get Agent Action",
+    description: "Get one QDash agent action by sessionId and actionId.",
+    promptSnippet: "Get QDash agent action details",
+    promptGuidelines: ["Use qdash_get_agent_action to inspect a submitted QDash agent action."],
+    parameters: Type.Object({ ...connectionParams, sessionId: Type.String(), actionId: Type.String() }),
+    async execute(_toolCallId, params: { profile?: string; configPath?: string; useEnv?: boolean; sessionId: string; actionId: string }) {
+      const client = await makeClient(params);
+      return toToolResult(await client.getAgentAction(params.sessionId, params.actionId), { tool: "qdash_get_agent_action" });
+    },
+  });
+
+  pi.registerTool({
+    name: "qdash_list_agent_actions",
+    label: "QDash List Agent Actions",
+    description: "List QDash agent actions for a session.",
+    promptSnippet: "List QDash agent actions for an agent session",
+    promptGuidelines: ["Use qdash_list_agent_actions to inspect actions in a QDash agent session."],
+    parameters: Type.Object({ ...connectionParams, sessionId: Type.String() }),
+    async execute(_toolCallId, params: { profile?: string; configPath?: string; useEnv?: boolean; sessionId: string }) {
+      const client = await makeClient(params);
+      return toToolResult(await client.listAgentActions(params.sessionId), { tool: "qdash_list_agent_actions" });
+    },
+  });
+
+  pi.registerTool({
+    name: "qdash_wait_agent_action",
+    label: "QDash Wait Agent Action",
+    description: "Wait for a QDash agent action to be dispatched or linked to an execution.",
+    promptSnippet: "Poll QDash until an agent action is dispatched or linked to execution",
+    promptGuidelines: ["Use qdash_wait_agent_action after submitting an agent action when the user wants polling."],
+    parameters: Type.Object({
+      ...connectionParams,
+      sessionId: Type.String(),
+      actionId: Type.String(),
+      waitForExecution: Type.Optional(Type.Boolean({ description: "If true, wait for execution_id; otherwise wait for operation_id." })),
+      timeoutSeconds: Type.Optional(Type.Number()),
+      pollIntervalSeconds: Type.Optional(Type.Number()),
+    }),
+    async execute(_toolCallId, params: { profile?: string; configPath?: string; useEnv?: boolean; sessionId: string; actionId: string; waitForExecution?: boolean; timeoutSeconds?: number; pollIntervalSeconds?: number }) {
+      const client = await makeClient(params);
+      const options = { timeoutSeconds: params.timeoutSeconds, pollIntervalSeconds: params.pollIntervalSeconds };
+      const data = params.waitForExecution
+        ? await client.waitForAgentActionExecution(params.sessionId, params.actionId, options)
+        : await client.waitForAgentAction(params.sessionId, params.actionId, options);
+      return toToolResult(data, { tool: "qdash_wait_agent_action" });
+    },
+  });
+
+  pi.registerTool({
+    name: "qdash_list_agent_action_candidates",
+    label: "QDash List Agent Action Candidates",
+    description: "List candidate parameter updates produced by a QDash agent action.",
+    promptSnippet: "List QDash agent action candidates",
+    promptGuidelines: ["Use qdash_list_agent_action_candidates before committing or applying candidates."],
+    parameters: Type.Object({ ...connectionParams, sessionId: Type.String(), actionId: Type.String() }),
+    async execute(_toolCallId, params: { profile?: string; configPath?: string; useEnv?: boolean; sessionId: string; actionId: string }) {
+      const client = await makeClient(params);
+      return toToolResult(await client.listAgentActionCandidates(params.sessionId, params.actionId), { tool: "qdash_list_agent_action_candidates" });
+    },
+  });
+
+  pi.registerTool({
+    name: "qdash_commit_agent_candidate",
+    label: "QDash Commit Agent Candidate",
+    description: "Commit a QDash agent action candidate. This is a write operation and requires confirmation.",
+    promptSnippet: "Commit a QDash agent candidate after explicit user confirmation",
+    promptGuidelines: ["Use qdash_commit_agent_candidate only after showing the candidate and receiving explicit confirmation."],
+    parameters: Type.Object({
+      ...connectionParams,
+      sessionId: Type.String(),
+      actionId: Type.String(),
+      parameterName: Type.String(),
+      taskId: Type.String(),
+      idempotencyKey: Type.Optional(Type.String()),
+      expectedStateVersion: Type.Number(),
+      confirmWrite: Type.Optional(Type.Boolean()),
+    }),
+    async execute(_toolCallId, params: ConfirmableParams & { profile?: string; configPath?: string; useEnv?: boolean; sessionId: string; actionId: string; parameterName: string; taskId: string; idempotencyKey?: string; expectedStateVersion: number }, _signal, _onUpdate, ctx) {
+      if (!params.confirmWrite) {
+        if (!ctx.hasUI || !(await ctx.ui.confirm("Commit QDash agent candidate?", `Commit candidate '${params.parameterName}' for task '${params.taskId}'?`))) {
+          throw new Error("qdash_commit_agent_candidate requires explicit confirmation");
+        }
+      }
+      const client = await makeClient(params);
+      const data = await client.commitAgentActionCandidate(params.sessionId, params.actionId, params.parameterName, {
+        idempotencyKey: params.idempotencyKey ?? randomUUID(),
+        expectedStateVersion: params.expectedStateVersion,
+        taskId: params.taskId,
+      });
+      return toToolResult(data, { tool: "qdash_commit_agent_candidate" });
+    },
   });
 
   registerQueryTool({
