@@ -994,6 +994,107 @@ export default function qdashExtension(pi: ExtensionAPI) {
     },
   });
 
+  pi.registerTool({
+    name: "qdash_list_forum_posts",
+    label: "QDash List Forum Posts",
+    description: "List QDash forum posts with optional category/status/chip/target filters.",
+    promptSnippet: "List QDash forum posts",
+    promptGuidelines: ["Use qdash_list_forum_posts instead of qdash_query when the user asks for QDash forum posts."],
+    parameters: Type.Object({
+      ...connectionParams,
+      category: Type.Optional(Type.String()),
+      status: Type.Optional(Type.String()),
+      chipId: Type.Optional(Type.String()),
+      targetType: Type.Optional(Type.String()),
+      targetId: Type.Optional(Type.String()),
+      skip: Type.Optional(Type.Number()),
+      limit: Type.Optional(Type.Number()),
+    }),
+    async execute(_toolCallId, params: { profile?: string; configPath?: string; useEnv?: boolean; category?: string; status?: string; chipId?: string; targetType?: string; targetId?: string; skip?: number; limit?: number }) {
+      const client = await makeClient(params);
+      return toToolResult(await client.listForumPosts({
+        category: params.category,
+        status: params.status,
+        chipId: params.chipId ?? currentContext.chipId,
+        targetType: params.targetType,
+        targetId: params.targetId,
+        skip: params.skip,
+        limit: params.limit,
+      }), { tool: "qdash_list_forum_posts" });
+    },
+  });
+
+  pi.registerTool({
+    name: "qdash_get_forum_post",
+    label: "QDash Get Forum Post",
+    description: "Get a QDash forum post by postId.",
+    promptSnippet: "Get QDash forum post details",
+    promptGuidelines: ["Use qdash_get_forum_post to inspect one QDash forum post."],
+    parameters: Type.Object({ ...connectionParams, postId: Type.String() }),
+    async execute(_toolCallId, params: { profile?: string; configPath?: string; useEnv?: boolean; postId: string }) {
+      const client = await makeClient(params);
+      return toToolResult(await client.getForumPost(params.postId), { tool: "qdash_get_forum_post" });
+    },
+  });
+
+  pi.registerTool({
+    name: "qdash_list_forum_replies",
+    label: "QDash List Forum Replies",
+    description: "List replies for a QDash forum post by postId.",
+    promptSnippet: "List replies for a QDash forum post",
+    promptGuidelines: ["Use qdash_list_forum_replies to inspect replies on a QDash forum post."],
+    parameters: Type.Object({ ...connectionParams, postId: Type.String() }),
+    async execute(_toolCallId, params: { profile?: string; configPath?: string; useEnv?: boolean; postId: string }) {
+      const client = await makeClient(params);
+      return toToolResult(await client.getForumPostReplies(params.postId), { tool: "qdash_list_forum_replies" });
+    },
+  });
+
+  pi.registerTool({
+    name: "qdash_create_forum_post",
+    label: "QDash Create Forum Post",
+    description: "Create a QDash forum post. This is a write operation and requires confirmation.",
+    promptSnippet: "Create a QDash forum post after explicit user confirmation",
+    promptGuidelines: ["Use qdash_create_forum_post only after the user confirms the exact post contents."],
+    parameters: Type.Object({
+      ...connectionParams,
+      request: Type.Any({ description: "ForumPostCreate request body accepted by QDash." }),
+      confirmWrite: Type.Optional(Type.Boolean()),
+    }),
+    async execute(_toolCallId, params: ConfirmableParams & { profile?: string; configPath?: string; useEnv?: boolean; request: unknown }, _signal, _onUpdate, ctx) {
+      if (!params.confirmWrite) {
+        if (!ctx.hasUI || !(await ctx.ui.confirm("Create QDash forum post?", "This will create a forum post in QDash."))) {
+          throw new Error("qdash_create_forum_post requires explicit confirmation");
+        }
+      }
+      const client = await makeClient(params);
+      return toToolResult(await client.createForumPost(params.request as never), { tool: "qdash_create_forum_post" });
+    },
+  });
+
+  pi.registerTool({
+    name: "qdash_update_forum_post",
+    label: "QDash Update Forum Post",
+    description: "Update a QDash forum post. This is a write operation and requires confirmation.",
+    promptSnippet: "Update a QDash forum post after explicit user confirmation",
+    promptGuidelines: ["Use qdash_update_forum_post only after the user confirms the exact post update."],
+    parameters: Type.Object({
+      ...connectionParams,
+      postId: Type.String(),
+      request: Type.Any({ description: "ForumPostUpdate request body accepted by QDash." }),
+      confirmWrite: Type.Optional(Type.Boolean()),
+    }),
+    async execute(_toolCallId, params: ConfirmableParams & { profile?: string; configPath?: string; useEnv?: boolean; postId: string; request: unknown }, _signal, _onUpdate, ctx) {
+      if (!params.confirmWrite) {
+        if (!ctx.hasUI || !(await ctx.ui.confirm("Update QDash forum post?", `Update forum post '${params.postId}'?`))) {
+          throw new Error("qdash_update_forum_post requires explicit confirmation");
+        }
+      }
+      const client = await makeClient(params);
+      return toToolResult(await client.updateForumPost(params.postId, params.request as never), { tool: "qdash_update_forum_post" });
+    },
+  });
+
   registerQueryTool({
     name: "qdash_get_provenance_stats",
     label: "QDash Provenance Stats",

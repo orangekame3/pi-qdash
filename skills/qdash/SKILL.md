@@ -19,6 +19,7 @@ Use the pi-qdash tools instead of scraping the UI or hand-writing auth headers.
    - `qdash_list_flows`, `qdash_get_flow`
    - `qdash_list_executions`, `qdash_get_execution`
    - `qdash_list_ai_reviews`, `qdash_get_provenance_stats`
+   - `qdash_list_forum_posts`, `qdash_get_forum_post`, `qdash_list_forum_replies`
 3. Use harness overview tools for status and triage:
    - `qdash_dashboard`
    - `qdash_triage_overview`
@@ -72,6 +73,6 @@ If `QDASH_BASE_URL` is set and no profile is specified, the tools default to env
 ## Safety
 
 - Never print tokens, passwords, Cloudflare Access secrets, or full profile contents.
-- Treat write/operational endpoints (agent session/action creation, candidate commits, flow execute, git push/pull, re-execute, admin/auth APIs) as sensitive and ask the user before any write workflow.
+- Treat write/operational endpoints (agent session/action creation, candidate commits, forum create/update, flow execute, git push/pull, re-execute, admin/auth APIs) as sensitive and ask the user before any write workflow.
 - Set `confirmWrite: true` only after explicit user confirmation. In interactive pi, let the tool ask for confirmation when possible.
 - Prefer summarizing large responses with counts, IDs, time ranges, and notable values.

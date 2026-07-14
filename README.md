@@ -52,6 +52,7 @@ pi install git:github.com/orangekame3/pi-qdash
   - `qdash_list_flows`, `qdash_get_flow`
   - `qdash_list_executions`, `qdash_get_execution`
   - `qdash_list_ai_reviews`, `qdash_get_provenance_stats`
+  - `qdash_list_forum_posts`, `qdash_get_forum_post`, `qdash_list_forum_replies`
 - Harness overview tools:
   - `qdash_dashboard`
   - `qdash_triage_overview`
@@ -65,7 +66,9 @@ pi install git:github.com/orangekame3/pi-qdash
 - `qdash_query`: fallback for read-only queries that do not yet have a dedicated tool
 - `qdash_raw_get`: call read-only GET endpoints not covered by `qdash_query` through the qdash-client transport
 
-Secrets such as `api_token`, passwords, and Cloudflare Access secrets are redacted from tool output. Write-oriented agent workflow tools require explicit confirmation via UI or `confirmWrite: true`.
+Secrets such as `api_token`, passwords, and Cloudflare Access secrets are redacted from tool output. Write-oriented agent/forum workflow tools require explicit confirmation via UI or `confirmWrite: true`.
+
+Forum write tools are available as confirmation-gated operations: `qdash_create_forum_post` and `qdash_update_forum_post`.
 
 ## Skill
 
