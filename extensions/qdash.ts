@@ -431,14 +431,18 @@ function padAnsi(text: string, width: number): string {
 
 function boxed(title: string, body: string[], color = false): string[] {
   const plainTitle = ` ${title} `;
-  const width = Math.min(92, Math.max(36, ...body.map((line) => stripAnsi(line).length), plainTitle.length + 4));
+  const contentWidth = Math.min(
+    92,
+    Math.max(36, ...body.map((line) => stripAnsi(line).length), plainTitle.length),
+  );
+  const innerWidth = contentWidth + 2;
   const borderColor = (text: string) => color ? ansi("90", text) : text;
   const titleText = color ? ansi("1;36", plainTitle) : plainTitle;
-  const top = borderColor("╭") + titleText + borderColor("─".repeat(Math.max(0, width - plainTitle.length))) + borderColor("╮");
-  const bottom = borderColor("╰" + "─".repeat(width) + "╯");
+  const top = borderColor("╭") + titleText + borderColor("─".repeat(Math.max(0, innerWidth - plainTitle.length))) + borderColor("╮");
+  const bottom = borderColor("╰" + "─".repeat(innerWidth) + "╯");
   return [
     top,
-    ...body.map((line) => `${borderColor("│")} ${padAnsi(line, width - 2)} ${borderColor("│")}`),
+    ...body.map((line) => `${borderColor("│")} ${padAnsi(line, contentWidth)} ${borderColor("│")}`),
     bottom,
   ];
 }
