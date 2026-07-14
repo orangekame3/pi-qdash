@@ -20,6 +20,7 @@ Use the pi-qdash tools instead of scraping the UI or hand-writing auth headers.
    - `qdash_list_executions`, `qdash_get_execution`
    - `qdash_list_ai_reviews`, `qdash_get_provenance_stats`
    - `qdash_list_forum_posts`, `qdash_get_forum_post`, `qdash_list_forum_replies`
+   - `qdash_get_figure`, `qdash_get_task_figures`
 3. Use harness overview tools for status and triage:
    - `qdash_dashboard`
    - `qdash_triage_overview`

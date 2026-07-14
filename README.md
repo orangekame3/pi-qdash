@@ -53,6 +53,7 @@ pi install git:github.com/orangekame3/pi-qdash
   - `qdash_list_executions`, `qdash_get_execution`
   - `qdash_list_ai_reviews`, `qdash_get_provenance_stats`
   - `qdash_list_forum_posts`, `qdash_get_forum_post`, `qdash_list_forum_replies`
+  - `qdash_get_figure`, `qdash_get_task_figures`
 - Harness overview tools:
   - `qdash_dashboard`
   - `qdash_triage_overview`
@@ -70,7 +71,7 @@ pi install git:github.com/orangekame3/pi-qdash
 
 Secrets such as `api_token`, passwords, and Cloudflare Access secrets are redacted from tool output. Write-oriented agent/forum workflow tools are approval-gated: interactive pi shows a confirmation prompt, and non-interactive runs require `confirmWrite: true`.
 
-Forum read tools render compact boxed summaries for list/detail/reply views. Forum write tools are available as confirmation-gated operations: `qdash_create_forum_post` and `qdash_update_forum_post`.
+Forum read tools render compact boxed summaries for list/detail/reply views. Figure tools can fetch calibration PNG/JSON figures by path or task result and render images in interactive TUI. Forum write tools are available as confirmation-gated operations: `qdash_create_forum_post` and `qdash_update_forum_post`.
 
 ## Skill
 

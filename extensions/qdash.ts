@@ -3,7 +3,7 @@ import { existsSync, readFileSync } from "node:fs";
 
 import type { ExtensionAPI, Theme } from "@earendil-works/pi-coding-agent";
 import { QDashClient, defaultConfigPath } from "@oqtopus-team/qdash-client";
-import { Text, truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
+import { Image, Text, truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
 import { Type } from "typebox";
 
 type QDashQueryParams = {
@@ -100,6 +100,18 @@ type RawGetParams = {
 
 type ConfirmableParams = {
   confirmWrite?: boolean;
+};
+
+type FigureDetails = {
+  tool: string;
+  path: string;
+  mediaType: string;
+  sizeBytes: number;
+  base64?: string;
+  text?: string;
+  taskId?: string;
+  figurePaths?: string[];
+  jsonFigurePaths?: string[];
 };
 
 type QDashContextState = {
@@ -259,6 +271,15 @@ async function defaultChipId(client: QDashClient, chipId?: string): Promise<stri
 
 async function rawGet<T>(client: QDashClient, path: string, query?: Record<string, unknown>): Promise<T> {
   return (client as unknown as { get<T>(path: string, query?: Record<string, unknown>): Promise<T> }).get(path, cleanQuery(query));
+}
+
+async function rawArrayBuffer(client: QDashClient, path: string, query?: Record<string, unknown>): Promise<ArrayBuffer> {
+  return (client as unknown as { transport: { request<T>(config: unknown): Promise<T> } }).transport.request<ArrayBuffer>({
+    method: "GET",
+    url: path,
+    params: cleanQuery(query),
+    responseType: "arraybuffer",
+  });
 }
 
 function cleanQuery(values: Record<string, unknown> = {}): Record<string, unknown> {
@@ -607,13 +628,58 @@ function forumDetailLines(post: unknown, title = "QDash Forum Post", color = fal
   ].filter((line): line is string => typeof line === "string"), color);
 }
 
-function textComponent(lines: string[], theme: Theme) {
+function textComponent(lines: string[], _theme: Theme) {
   return {
     render(width: number) {
       return lines.map((line) => truncateToWidth(line, width));
     },
     invalidate() {},
   };
+}
+
+function mediaTypeForPath(path: string): string {
+  const lower = path.toLowerCase();
+  if (lower.endsWith(".png")) return "image/png";
+  if (lower.endsWith(".jpg") || lower.endsWith(".jpeg")) return "image/jpeg";
+  if (lower.endsWith(".gif")) return "image/gif";
+  if (lower.endsWith(".webp")) return "image/webp";
+  if (lower.endsWith(".json")) return "application/json";
+  return "application/octet-stream";
+}
+
+async function fetchFigureDetails(client: QDashClient, path: string): Promise<FigureDetails> {
+  const buffer = await rawArrayBuffer(client, "/executions/figure", { path });
+  const bytes = Buffer.from(buffer);
+  const mediaType = mediaTypeForPath(path);
+  const details: FigureDetails = {
+    tool: "qdash_get_figure",
+    path,
+    mediaType,
+    sizeBytes: bytes.byteLength,
+  };
+  if (mediaType.startsWith("image/")) details.base64 = bytes.toString("base64");
+  else details.text = bytes.toString("utf8");
+  return details;
+}
+
+function figureResultText(details: FigureDetails): string {
+  const lines = boxed("QDash Figure", [
+    `path ${details.path}`,
+    `type ${details.mediaType}`,
+    `size ${details.sizeBytes} bytes`,
+    ...(details.taskId ? [`task ${details.taskId}`] : []),
+    ...(details.figurePaths?.length ? [`figures ${details.figurePaths.length}`] : []),
+    ...(details.jsonFigurePaths?.length ? [`json figures ${details.jsonFigurePaths.length}`] : []),
+    ...(details.text ? ["", ...details.text.split("\n").slice(0, 12).map((line) => `  ${line}`)] : []),
+  ]);
+  return lines.join("\n");
+}
+
+function figureComponent(details: FigureDetails, theme: Theme) {
+  if (details.base64 && details.mediaType.startsWith("image/")) {
+    return new Image(details.base64, details.mediaType, { fallbackColor: (text: string) => theme.fg("dim", text) }, { maxWidthCells: 90, maxHeightCells: 30 });
+  }
+  return textComponent(figureResultText(details).split("\n"), theme);
 }
 
 async function executeQuery(params: QDashQueryParams) {
@@ -1340,6 +1406,67 @@ export default function qdashExtension(pi: ExtensionAPI) {
     async execute(_toolCallId, params: { profile?: string; configPath?: string; useEnv?: boolean; sessionId: string; commitId: string; timeoutSeconds?: number; pollIntervalSeconds?: number }) {
       const client = await makeClient(params);
       return toToolResult(await client.waitForAgentCandidateApply(params.sessionId, params.commitId, { timeoutSeconds: params.timeoutSeconds, pollIntervalSeconds: params.pollIntervalSeconds }), { tool: "qdash_wait_agent_candidate_apply" });
+    },
+  });
+
+  pi.registerTool({
+    name: "qdash_get_figure",
+    label: "QDash Get Figure",
+    description: "Fetch a QDash calibration figure by absolute figure path and render images in interactive TUI.",
+    promptSnippet: "Fetch and render a QDash calibration figure image or JSON figure by path",
+    promptGuidelines: ["Use qdash_get_figure when the user asks to inspect a calibration figure path from a task result or execution."],
+    parameters: Type.Object({
+      ...connectionParams,
+      path: Type.String({ description: "Absolute figure path, e.g. /app/calib_data/.../fig/Figure.png" }),
+    }),
+    async execute(_toolCallId, params: { profile?: string; configPath?: string; useEnv?: boolean; path: string }) {
+      const client = await makeClient(params);
+      const details = await fetchFigureDetails(client, params.path);
+      return toTextToolResult(figureResultText(details), { path: params.path }, details);
+    },
+    renderResult(result, _options, theme) {
+      return figureComponent(result.details as unknown as FigureDetails, theme);
+    },
+  });
+
+  pi.registerTool({
+    name: "qdash_get_task_figures",
+    label: "QDash Get Task Figures",
+    description: "Fetch figure paths from a QDash task result and render one selected figure in interactive TUI.",
+    promptSnippet: "Fetch and render calibration figures associated with a QDash task result",
+    promptGuidelines: ["Use qdash_get_task_figures after inspecting a task result with figure_path/json_figure_path."],
+    parameters: Type.Object({
+      ...connectionParams,
+      taskId: Type.String(),
+      index: Type.Optional(Type.Number({ description: "Figure index to fetch. Defaults to 0." })),
+      preferJson: Type.Optional(Type.Boolean({ description: "Fetch json_figure_path instead of figure_path when available." })),
+    }),
+    async execute(_toolCallId, params: { profile?: string; configPath?: string; useEnv?: boolean; taskId: string; index?: number; preferJson?: boolean }) {
+      const client = await makeClient(params);
+      const task = await client.getTaskResult(params.taskId) as unknown as { figure_path?: string[]; json_figure_path?: string[] };
+      const figurePaths = Array.isArray(task.figure_path) ? task.figure_path : [];
+      const jsonFigurePaths = Array.isArray(task.json_figure_path) ? task.json_figure_path : [];
+      const paths = params.preferJson && jsonFigurePaths.length > 0 ? jsonFigurePaths : figurePaths;
+      const index = params.index ?? 0;
+      const path = paths[index];
+      if (!path) {
+        return toTextToolResult(boxed("QDash Task Figures", [
+          `task ${params.taskId}`,
+          `figures ${figurePaths.length}`,
+          `json figures ${jsonFigurePaths.length}`,
+          "",
+          "No figure at requested index.",
+        ]).join("\n"), { taskId: params.taskId, figurePaths, jsonFigurePaths }, { tool: "qdash_get_task_figures", taskId: params.taskId, figurePaths, jsonFigurePaths, path: "", mediaType: "", sizeBytes: 0 } satisfies FigureDetails);
+      }
+      const details = await fetchFigureDetails(client, path);
+      details.tool = "qdash_get_task_figures";
+      details.taskId = params.taskId;
+      details.figurePaths = figurePaths;
+      details.jsonFigurePaths = jsonFigurePaths;
+      return toTextToolResult(figureResultText(details), { taskId: params.taskId, figurePaths, jsonFigurePaths, selectedPath: path }, details);
+    },
+    renderResult(result, _options, theme) {
+      return figureComponent(result.details as unknown as FigureDetails, theme);
     },
   });
 
