@@ -68,7 +68,7 @@ pi install git:github.com/orangekame3/pi-qdash
 
 Secrets such as `api_token`, passwords, and Cloudflare Access secrets are redacted from tool output. Write-oriented agent/forum workflow tools require explicit confirmation via UI or `confirmWrite: true`.
 
-Forum write tools are available as confirmation-gated operations: `qdash_create_forum_post` and `qdash_update_forum_post`.
+Forum read tools render compact boxed summaries for list/detail/reply views. Forum write tools are available as confirmation-gated operations: `qdash_create_forum_post` and `qdash_update_forum_post`.
 
 ## Skill
 

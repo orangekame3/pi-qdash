@@ -3,7 +3,7 @@ import { existsSync, readFileSync } from "node:fs";
 
 import type { ExtensionAPI, Theme } from "@earendil-works/pi-coding-agent";
 import { QDashClient, defaultConfigPath } from "@oqtopus-team/qdash-client";
-import { Text, truncateToWidth } from "@earendil-works/pi-tui";
+import { Text, truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
 import { Type } from "typebox";
 
 type QDashQueryParams = {
@@ -425,15 +425,34 @@ function stripAnsi(text: string): string {
   return text.replace(/\u001b\[[0-9;]*m/g, "");
 }
 
+function displayWidth(text: string): number {
+  return visibleWidth(stripAnsi(text));
+}
+
 function padAnsi(text: string, width: number): string {
-  return text + " ".repeat(Math.max(0, width - stripAnsi(text).length));
+  return text + " ".repeat(Math.max(0, width - displayWidth(text)));
+}
+
+function truncateDisplay(text: string, width: number): string {
+  if (displayWidth(text) <= width) return text;
+  const ellipsis = "…";
+  const target = Math.max(0, width - visibleWidth(ellipsis));
+  let out = "";
+  let used = 0;
+  for (const char of Array.from(text)) {
+    const charWidth = visibleWidth(char);
+    if (used + charWidth > target) break;
+    out += char;
+    used += charWidth;
+  }
+  return out + ellipsis;
 }
 
 function boxed(title: string, body: string[], color = false): string[] {
   const plainTitle = ` ${title} `;
   const contentWidth = Math.min(
     92,
-    Math.max(36, ...body.map((line) => stripAnsi(line).length), plainTitle.length),
+    Math.max(36, ...body.map((line) => displayWidth(line)), visibleWidth(plainTitle)),
   );
   const innerWidth = contentWidth + 2;
   const borderColor = (text: string) => color ? ansi("90", text) : text;
@@ -442,7 +461,10 @@ function boxed(title: string, body: string[], color = false): string[] {
   const bottom = borderColor("╰" + "─".repeat(innerWidth) + "╯");
   return [
     top,
-    ...body.map((line) => `${borderColor("│")} ${padAnsi(line, contentWidth)} ${borderColor("│")}`),
+    ...body.map((line) => {
+      const clipped = color ? truncateToWidth(line, contentWidth) : truncateDisplay(line, contentWidth);
+      return `${borderColor("│")} ${padAnsi(clipped, contentWidth)} ${borderColor("│")}`;
+    }),
     bottom,
   ];
 }
@@ -513,6 +535,72 @@ function dashboardComponent(dashboard: Awaited<ReturnType<typeof buildDashboard>
     render(width: number) {
       const border = theme.fg("borderMuted", "─".repeat(Math.max(0, Math.min(width, 80))));
       return [border, ...styledDashboardLines(dashboard, theme), border].map((line) => truncateToWidth(line, width));
+    },
+    invalidate() {},
+  };
+}
+
+function forumPostsFromPayload(payload: unknown): Record<string, unknown>[] {
+  if (Array.isArray(payload)) return payload.filter((item): item is Record<string, unknown> => Boolean(item) && typeof item === "object");
+  if (payload && typeof payload === "object") {
+    const object = payload as Record<string, unknown>;
+    for (const key of ["posts", "items", "results", "data"]) {
+      if (Array.isArray(object[key])) return object[key].filter((item): item is Record<string, unknown> => Boolean(item) && typeof item === "object");
+    }
+  }
+  return [];
+}
+
+function forumPostId(post: Record<string, unknown>): string {
+  return firstString(post, ["post_id", "id", "forum_post_id"]) ?? "unknown";
+}
+
+function forumPostTitle(post: Record<string, unknown>): string {
+  return firstString(post, ["title", "subject", "summary"]) ?? firstString(post, ["content", "body", "text"])?.slice(0, 60) ?? "(untitled)";
+}
+
+function forumPostLine(post: Record<string, unknown>): string {
+  const id = shortId(forumPostId(post), 18);
+  const title = forumPostTitle(post);
+  const status = firstString(post, ["status"]);
+  const category = firstString(post, ["category"]);
+  const target = firstString(post, ["target_id", "chip_id", "task_id", "qid"]);
+  return ["•", id, title, category ? `[${category}]` : undefined, status ? `[${status}]` : undefined, target ? `(${target})` : undefined]
+    .filter(Boolean)
+    .join(" ");
+}
+
+function forumListLines(payload: unknown, title = "QDash Forum", color = false): string[] {
+  const posts = forumPostsFromPayload(payload);
+  const total = payloadTotal(payload);
+  const accent = (text: string) => color ? ansi("1;36", text) : text;
+  const dim = (text: string) => color ? ansi("2", text) : text;
+  return boxed(title, [
+    `posts ${accent(`${posts.length}/${total}`)}`,
+    "",
+    ...(posts.length > 0 ? posts.map((post) => `  ${forumPostLine(post)}`) : [`  ${dim("none")}`]),
+  ], color);
+}
+
+function forumDetailLines(post: unknown, title = "QDash Forum Post", color = false): string[] {
+  const object = post && typeof post === "object" ? post as Record<string, unknown> : {};
+  const accent = (text: string) => color ? ansi("1;36", text) : text;
+  const muted = (text: string) => color ? ansi("90", text) : text;
+  const content = firstString(object, ["content", "body", "text", "message", "description"]);
+  return boxed(title, [
+    `${muted("id")} ${accent(forumPostId(object))}`,
+    `${muted("title")} ${forumPostTitle(object)}`,
+    firstString(object, ["status"]) ? `${muted("status")} ${firstString(object, ["status"])}` : undefined,
+    firstString(object, ["category"]) ? `${muted("category")} ${firstString(object, ["category"])}` : undefined,
+    "",
+    ...(content ? content.split("\n").slice(0, 8).map((line) => `  ${line}`) : ["  (no content)"]),
+  ].filter((line): line is string => typeof line === "string"), color);
+}
+
+function textComponent(lines: string[], theme: Theme) {
+  return {
+    render(width: number) {
+      return lines.map((line) => truncateToWidth(line, width));
     },
     invalidate() {},
   };
@@ -1009,10 +1097,11 @@ export default function qdashExtension(pi: ExtensionAPI) {
       targetId: Type.Optional(Type.String()),
       skip: Type.Optional(Type.Number()),
       limit: Type.Optional(Type.Number()),
+      color: Type.Optional(Type.Boolean({ description: "Emit ANSI colors in text output for terminal display." })),
     }),
-    async execute(_toolCallId, params: { profile?: string; configPath?: string; useEnv?: boolean; category?: string; status?: string; chipId?: string; targetType?: string; targetId?: string; skip?: number; limit?: number }) {
+    async execute(_toolCallId, params: { profile?: string; configPath?: string; useEnv?: boolean; category?: string; status?: string; chipId?: string; targetType?: string; targetId?: string; skip?: number; limit?: number; color?: boolean }) {
       const client = await makeClient(params);
-      return toToolResult(await client.listForumPosts({
+      const data = await client.listForumPosts({
         category: params.category,
         status: params.status,
         chipId: params.chipId ?? currentContext.chipId,
@@ -1020,7 +1109,12 @@ export default function qdashExtension(pi: ExtensionAPI) {
         targetId: params.targetId,
         skip: params.skip,
         limit: params.limit,
-      }), { tool: "qdash_list_forum_posts" });
+      });
+      return toTextToolResult(forumListLines(data, "QDash Forum", params.color).join("\n"), data, { tool: "qdash_list_forum_posts" });
+    },
+    renderResult(result, _options, theme) {
+      const data = (result.details as { data?: unknown } | undefined)?.data;
+      return textComponent(forumListLines(data, "QDash Forum"), theme);
     },
   });
 
@@ -1030,10 +1124,15 @@ export default function qdashExtension(pi: ExtensionAPI) {
     description: "Get a QDash forum post by postId.",
     promptSnippet: "Get QDash forum post details",
     promptGuidelines: ["Use qdash_get_forum_post to inspect one QDash forum post."],
-    parameters: Type.Object({ ...connectionParams, postId: Type.String() }),
-    async execute(_toolCallId, params: { profile?: string; configPath?: string; useEnv?: boolean; postId: string }) {
+    parameters: Type.Object({ ...connectionParams, postId: Type.String(), color: Type.Optional(Type.Boolean({ description: "Emit ANSI colors in text output for terminal display." })) }),
+    async execute(_toolCallId, params: { profile?: string; configPath?: string; useEnv?: boolean; postId: string; color?: boolean }) {
       const client = await makeClient(params);
-      return toToolResult(await client.getForumPost(params.postId), { tool: "qdash_get_forum_post" });
+      const data = await client.getForumPost(params.postId);
+      return toTextToolResult(forumDetailLines(data, "QDash Forum Post", params.color).join("\n"), data, { tool: "qdash_get_forum_post" });
+    },
+    renderResult(result, _options, theme) {
+      const data = (result.details as { data?: unknown } | undefined)?.data;
+      return textComponent(forumDetailLines(data, "QDash Forum Post"), theme);
     },
   });
 
@@ -1043,10 +1142,15 @@ export default function qdashExtension(pi: ExtensionAPI) {
     description: "List replies for a QDash forum post by postId.",
     promptSnippet: "List replies for a QDash forum post",
     promptGuidelines: ["Use qdash_list_forum_replies to inspect replies on a QDash forum post."],
-    parameters: Type.Object({ ...connectionParams, postId: Type.String() }),
-    async execute(_toolCallId, params: { profile?: string; configPath?: string; useEnv?: boolean; postId: string }) {
+    parameters: Type.Object({ ...connectionParams, postId: Type.String(), color: Type.Optional(Type.Boolean({ description: "Emit ANSI colors in text output for terminal display." })) }),
+    async execute(_toolCallId, params: { profile?: string; configPath?: string; useEnv?: boolean; postId: string; color?: boolean }) {
       const client = await makeClient(params);
-      return toToolResult(await client.getForumPostReplies(params.postId), { tool: "qdash_list_forum_replies" });
+      const data = await client.getForumPostReplies(params.postId);
+      return toTextToolResult(forumListLines(data, "QDash Forum Replies", params.color).join("\n"), data, { tool: "qdash_list_forum_replies" });
+    },
+    renderResult(result, _options, theme) {
+      const data = (result.details as { data?: unknown } | undefined)?.data;
+      return textComponent(forumListLines(data, "QDash Forum Replies"), theme);
     },
   });
 
