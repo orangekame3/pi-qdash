@@ -282,6 +282,39 @@ async function rawArrayBuffer(client: QDashClient, path: string, query?: Record<
   });
 }
 
+type DownloadedFigureFile = {
+  data: ArrayBuffer;
+  mediaType: string;
+  filename?: string;
+  path?: string;
+  figurePaths?: string[];
+  jsonFigurePaths?: string[];
+};
+
+async function getExecutionFigureFile(client: QDashClient, path: string): Promise<DownloadedFigureFile> {
+  const modern = client as unknown as { getExecutionFigure?: (path: string) => Promise<DownloadedFigureFile> };
+  if (typeof modern.getExecutionFigure === "function") return modern.getExecutionFigure(path);
+  return {
+    data: await rawArrayBuffer(client, "/executions/figure", { path }),
+    mediaType: mediaTypeForPath(path),
+    filename: path.split("/").filter(Boolean).at(-1),
+    path,
+  };
+}
+
+async function getTaskResultFigureFile(client: QDashClient, taskId: string, options: { index?: number; preferJson?: boolean } = {}): Promise<DownloadedFigureFile> {
+  const modern = client as unknown as { getTaskResultFigure?: (taskId: string, options?: { index?: number; preferJson?: boolean }) => Promise<DownloadedFigureFile> };
+  if (typeof modern.getTaskResultFigure === "function") return modern.getTaskResultFigure(taskId, options);
+
+  const task = await client.getTaskResult(taskId) as unknown as { figure_path?: string[]; json_figure_path?: string[] };
+  const figurePaths = Array.isArray(task.figure_path) ? task.figure_path : [];
+  const jsonFigurePaths = Array.isArray(task.json_figure_path) ? task.json_figure_path : [];
+  const paths = options.preferJson && jsonFigurePaths.length > 0 ? jsonFigurePaths : figurePaths;
+  const path = paths[options.index ?? 0];
+  if (!path) throw new Error(`No figure at index ${options.index ?? 0} for task result '${taskId}'`);
+  return { ...(await getExecutionFigureFile(client, path)), path, figurePaths, jsonFigurePaths };
+}
+
 function cleanQuery(values: Record<string, unknown> = {}): Record<string, unknown> {
   return Object.fromEntries(Object.entries(values).filter(([, value]) => value !== undefined && value !== null));
 }
@@ -648,12 +681,12 @@ function mediaTypeForPath(path: string): string {
 }
 
 async function fetchFigureDetails(client: QDashClient, path: string): Promise<FigureDetails> {
-  const buffer = await rawArrayBuffer(client, "/executions/figure", { path });
-  const bytes = Buffer.from(buffer);
-  const mediaType = mediaTypeForPath(path);
+  const file = await getExecutionFigureFile(client, path);
+  const bytes = Buffer.from(file.data);
+  const mediaType = file.mediaType || mediaTypeForPath(path);
   const details: FigureDetails = {
     tool: "qdash_get_figure",
-    path,
+    path: file.path ?? path,
     mediaType,
     sizeBytes: bytes.byteLength,
   };
@@ -1443,27 +1476,29 @@ export default function qdashExtension(pi: ExtensionAPI) {
     }),
     async execute(_toolCallId, params: { profile?: string; configPath?: string; useEnv?: boolean; taskId: string; index?: number; preferJson?: boolean }) {
       const client = await makeClient(params);
-      const task = await client.getTaskResult(params.taskId) as unknown as { figure_path?: string[]; json_figure_path?: string[] };
-      const figurePaths = Array.isArray(task.figure_path) ? task.figure_path : [];
-      const jsonFigurePaths = Array.isArray(task.json_figure_path) ? task.json_figure_path : [];
-      const paths = params.preferJson && jsonFigurePaths.length > 0 ? jsonFigurePaths : figurePaths;
-      const index = params.index ?? 0;
-      const path = paths[index];
-      if (!path) {
+      try {
+        const file = await getTaskResultFigureFile(client, params.taskId, { index: params.index, preferJson: params.preferJson });
+        const bytes = Buffer.from(file.data);
+        const mediaType = file.mediaType || mediaTypeForPath(file.path ?? "");
+        const details: FigureDetails = {
+          tool: "qdash_get_task_figures",
+          taskId: params.taskId,
+          path: file.path ?? "",
+          mediaType,
+          sizeBytes: bytes.byteLength,
+          figurePaths: file.figurePaths ?? [],
+          jsonFigurePaths: file.jsonFigurePaths ?? [],
+        };
+        if (mediaType.startsWith("image/")) details.base64 = bytes.toString("base64");
+        else details.text = bytes.toString("utf8");
+        return toTextToolResult(figureResultText(details), { taskId: params.taskId, figurePaths: details.figurePaths, jsonFigurePaths: details.jsonFigurePaths, selectedPath: details.path }, details);
+      } catch (error) {
         return toTextToolResult(boxed("QDash Task Figures", [
           `task ${params.taskId}`,
-          `figures ${figurePaths.length}`,
-          `json figures ${jsonFigurePaths.length}`,
           "",
-          "No figure at requested index.",
-        ]).join("\n"), { taskId: params.taskId, figurePaths, jsonFigurePaths }, { tool: "qdash_get_task_figures", taskId: params.taskId, figurePaths, jsonFigurePaths, path: "", mediaType: "", sizeBytes: 0 } satisfies FigureDetails);
+          error instanceof Error ? error.message : String(error),
+        ]).join("\n"), { taskId: params.taskId, error: error instanceof Error ? error.message : String(error) }, { tool: "qdash_get_task_figures", taskId: params.taskId, path: "", mediaType: "", sizeBytes: 0 } satisfies FigureDetails);
       }
-      const details = await fetchFigureDetails(client, path);
-      details.tool = "qdash_get_task_figures";
-      details.taskId = params.taskId;
-      details.figurePaths = figurePaths;
-      details.jsonFigurePaths = jsonFigurePaths;
-      return toTextToolResult(figureResultText(details), { taskId: params.taskId, figurePaths, jsonFigurePaths, selectedPath: path }, details);
     },
     renderResult(result, _options, theme) {
       return figureComponent(result.details as unknown as FigureDetails, theme);
