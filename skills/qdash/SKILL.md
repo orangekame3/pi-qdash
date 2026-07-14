@@ -74,5 +74,5 @@ If `QDASH_BASE_URL` is set and no profile is specified, the tools default to env
 
 - Never print tokens, passwords, Cloudflare Access secrets, or full profile contents.
 - Treat write/operational endpoints (agent session/action creation, candidate commits, forum create/update, flow execute, git push/pull, re-execute, admin/auth APIs) as sensitive and ask the user before any write workflow.
-- Set `confirmWrite: true` only after explicit user confirmation. In interactive pi, let the tool ask for confirmation when possible.
+- Write-oriented QDash tools are approval-gated. In interactive pi, let the extension prompt for confirmation. In non-interactive runs, set `confirmWrite: true` only after explicit user confirmation.
 - Prefer summarizing large responses with counts, IDs, time ranges, and notable values.
