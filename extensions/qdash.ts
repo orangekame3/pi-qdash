@@ -988,14 +988,6 @@ function taskFigurePaths(task: Record<string, unknown>, maxFigures: number): str
   return Array.isArray(paths) ? paths.filter((item): item is string => typeof item === "string").slice(0, maxFigures) : [];
 }
 
-function textInline(text: string) {
-  return { type: "text", text, styles: {} };
-}
-
-function linkInline(text: string, href: string) {
-  return { type: "link", href, content: [textInline(text)] };
-}
-
 async function buildForumEvidenceReply(client: QDashClient, params: ForumEvidenceReplyParams) {
   const [parent, task] = await Promise.all([
     client.getForumPost(params.parentPostId) as unknown as Promise<Record<string, unknown>>,
@@ -1028,21 +1020,14 @@ async function buildForumEvidenceReply(client: QDashClient, params: ForumEvidenc
     "",
     params.interpretation,
   ].join("\n");
-  const paragraphProps = { backgroundColor: "default", textColor: "default", textAlignment: "left" };
-  const contentBlocks = [
-    { id: randomUUID(), type: "heading", props: { ...paragraphProps, level: 2, isToggleable: false }, content: [textInline(title)], children: [] },
-    { id: randomUUID(), type: "paragraph", props: paragraphProps, content: [textInline(`${target} の ${taskName} から evidence を追加します。`)], children: [] },
-    { id: randomUUID(), type: "bulletListItem", props: paragraphProps, content: [textInline("task: "), linkInline("open task result", taskUrl)], children: [] },
-    ...(executionUrl ? [{ id: randomUUID(), type: "bulletListItem", props: paragraphProps, content: [textInline("execution: "), linkInline("open execution", executionUrl)], children: [] }] : []),
-    ...(message ? [{ id: randomUUID(), type: "bulletListItem", props: paragraphProps, content: [textInline(`message: ${message}`)], children: [] }] : []),
-    ...figures.map((path) => ({ id: randomUUID(), type: "image", props: { textAlignment: "left", backgroundColor: "default", name: filenameFromFigurePath(path), url: figureApiUrl(path), caption: `${target} ${taskName}${executionId ? `, execution ${executionId}` : ""}`, showPreview: true }, children: [] })),
-    { id: randomUUID(), type: "paragraph", props: paragraphProps, content: [textInline(params.interpretation)], children: [] },
-  ];
+  // Keep content_blocks empty so QDash renders the markdown `content` directly.
+  // The current forum UI reliably renders markdown links and images, while BlockNote
+  // link inline objects can appear blank in some deployed versions.
   const request = {
     category,
     title: null,
     content,
-    content_blocks: contentBlocks,
+    content_blocks: [],
     parent_id: params.parentPostId,
     chip_id: chipId,
     target_type: targetType,
