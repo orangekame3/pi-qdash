@@ -1,8 +1,9 @@
 import { randomUUID } from "node:crypto";
 import { existsSync, readFileSync } from "node:fs";
 
-import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import type { ExtensionAPI, Theme } from "@earendil-works/pi-coding-agent";
 import { QDashClient, defaultConfigPath } from "@oqtopus-team/qdash-client";
+import { Text, truncateToWidth } from "@earendil-works/pi-tui";
 import { Type } from "typebox";
 
 type QDashQueryParams = {
@@ -427,6 +428,50 @@ function dashboardLines(dashboard: Awaited<ReturnType<typeof buildDashboard>>): 
     "Failed task results",
     ...(dashboard.failedTaskResults.items.length > 0 ? dashboard.failedTaskResults.items.map((item, index) => `  ${formatItem(item, `task-${index + 1}`)}`) : ["  none"]),
   ];
+}
+
+function styledDashboardLines(dashboard: Awaited<ReturnType<typeof buildDashboard>>, theme: Theme): string[] {
+  const chips = arrayFromPayload(dashboard.chips);
+  const profile = dashboard.context.profile ?? "env/default";
+  const session = dashboard.context.agentSessionId ? shortId(dashboard.context.agentSessionId) : "none";
+  const issueColor = dashboard.openIssues.count > 0 ? "warning" : "success";
+  const failedColor = dashboard.failedTaskResults.count > 0 ? "error" : "success";
+  return [
+    theme.fg("accent", theme.bold("QDash Harness")),
+    `${theme.fg("muted", "profile")} ${theme.fg("accent", profile)}  ${theme.fg("muted", "chip")} ${theme.fg("accent", dashboard.context.chipId)}  ${theme.fg("muted", "session")} ${theme.fg("dim", session)}`,
+    "",
+    [
+      `${theme.fg("muted", "chips")} ${theme.fg("success", String(chips.length))}`,
+      `${theme.fg("muted", "open issues")} ${theme.fg(issueColor, String(dashboard.openIssues.count))}`,
+      `${theme.fg("muted", "executions")} ${theme.fg("accent", `${dashboard.recentExecutions.shown}/${dashboard.recentExecutions.count}`)}`,
+      `${theme.fg("muted", "failed tasks")} ${theme.fg(failedColor, `${dashboard.failedTaskResults.shown}/${dashboard.failedTaskResults.count}`)}`,
+    ].join("   "),
+    "",
+    theme.fg("borderAccent", "Open issues"),
+    ...(dashboard.openIssues.items.length > 0
+      ? dashboard.openIssues.items.map((item, index) => `  ${theme.fg("warning", formatItem(item, `issue-${index + 1}`))}`)
+      : [`  ${theme.fg("dim", "none")}`]),
+    "",
+    theme.fg("borderAccent", "Recent executions"),
+    ...(dashboard.recentExecutions.items.length > 0
+      ? dashboard.recentExecutions.items.map((item, index) => `  ${theme.fg("muted", formatItem(item, `exec-${index + 1}`))}`)
+      : [`  ${theme.fg("dim", "none")}`]),
+    "",
+    theme.fg("borderAccent", "Failed task results"),
+    ...(dashboard.failedTaskResults.items.length > 0
+      ? dashboard.failedTaskResults.items.map((item, index) => `  ${theme.fg("error", formatItem(item, `task-${index + 1}`))}`)
+      : [`  ${theme.fg("dim", "none")}`]),
+  ];
+}
+
+function dashboardComponent(dashboard: Awaited<ReturnType<typeof buildDashboard>>, theme: Theme) {
+  return {
+    render(width: number) {
+      const border = theme.fg("borderMuted", "─".repeat(Math.max(0, Math.min(width, 80))));
+      return [border, ...styledDashboardLines(dashboard, theme), border].map((line) => truncateToWidth(line, width));
+    },
+    invalidate() {},
+  };
 }
 
 async function executeQuery(params: QDashQueryParams) {
@@ -928,6 +973,15 @@ export default function qdashExtension(pi: ExtensionAPI) {
       const dashboard = await buildDashboard(params);
       return toToolResult(dashboard, { tool: "qdash_dashboard", lines: dashboardLines(dashboard) });
     },
+    renderCall(args, theme) {
+      const profile = args.profile ?? currentContext.profile ?? "context";
+      return new Text(theme.fg("toolTitle", theme.bold("qdash_dashboard ")) + theme.fg("muted", profile), 0, 0);
+    },
+    renderResult(result, _options, theme) {
+      const details = result.details as { data?: Awaited<ReturnType<typeof buildDashboard>> } | undefined;
+      if (details?.data) return dashboardComponent(details.data, theme);
+      return new Text(theme.fg("dim", "QDash dashboard unavailable"), 0, 0);
+    },
   });
 
   pi.registerTool({
@@ -948,6 +1002,19 @@ export default function qdashExtension(pi: ExtensionAPI) {
           dashboard.openIssues.count > 0 ? "Review open issues and correlate with recent executions." : undefined,
         ].filter(Boolean),
       }, { tool: "qdash_triage_overview" });
+    },
+    renderResult(result, _options, theme) {
+      const data = (result.details as { data?: { openIssues?: { count?: number }; failedTaskResults?: { count?: number }; suggestedFocus?: string[] } } | undefined)?.data;
+      if (!data) return new Text(theme.fg("dim", "QDash triage unavailable"), 0, 0);
+      const lines = [
+        theme.fg("accent", theme.bold("QDash Triage")),
+        `${theme.fg("muted", "open issues")} ${theme.fg((data.openIssues?.count ?? 0) > 0 ? "warning" : "success", String(data.openIssues?.count ?? 0))}`,
+        `${theme.fg("muted", "failed tasks")} ${theme.fg((data.failedTaskResults?.count ?? 0) > 0 ? "error" : "success", String(data.failedTaskResults?.count ?? 0))}`,
+        "",
+        theme.fg("borderAccent", "Suggested focus"),
+        ...(data.suggestedFocus?.length ? data.suggestedFocus.map((item) => `  ${theme.fg("warning", item)}`) : [`  ${theme.fg("dim", "none")}`]),
+      ];
+      return new Text(lines.join("\n"), 0, 0);
     },
   });
 
@@ -1042,7 +1109,7 @@ export default function qdashExtension(pi: ExtensionAPI) {
       const limit = args.trim() ? Number(args.trim()) : undefined;
       const dashboard = await buildDashboard({ limit: Number.isFinite(limit) ? limit : undefined });
       refreshContextUi(ctx);
-      ctx.ui.setWidget("qdash", dashboardLines(dashboard));
+      ctx.ui.setWidget("qdash", (_tui, theme) => dashboardComponent(dashboard, theme));
       ctx.ui.notify(`QDash dashboard updated: ${dashboard.openIssues.count} open issues, ${dashboard.failedTaskResults.count} failed tasks`, "info");
     },
   });
@@ -1053,7 +1120,7 @@ export default function qdashExtension(pi: ExtensionAPI) {
       const limit = args.trim() ? Number(args.trim()) : undefined;
       const dashboard = await buildDashboard({ limit: Number.isFinite(limit) ? limit : undefined });
       refreshContextUi(ctx);
-      ctx.ui.setWidget("qdash", dashboardLines(dashboard));
+      ctx.ui.setWidget("qdash", (_tui, theme) => dashboardComponent(dashboard, theme));
       ctx.ui.notify("QDash widget refreshed", "info");
     },
   });
