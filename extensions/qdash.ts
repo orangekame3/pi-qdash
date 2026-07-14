@@ -157,12 +157,15 @@ function contextStatusLine(theme?: Theme): string {
   const profile = currentContext.profile ?? (shouldUseEnv({}) ? "env" : "default");
   const chip = currentContext.chipId ?? "auto";
   const session = currentContext.agentSessionId ? shortId(currentContext.agentSessionId, 8) : "none";
+  const profileText = `${dim("profile")} ${success(profile)}`;
+  const chipText = `${dim("chip")} ${currentContext.chipId ? success(chip) : warn(chip)}`;
+  const sessionText = `${dim("agent")} ${currentContext.agentSessionId ? success(session) : dim(session)}`;
   return [
-    accent("QDash"),
-    dim("profile") + " " + success(profile),
-    dim("chip") + " " + (currentContext.chipId ? success(chip) : warn(chip)),
-    dim("session") + " " + (currentContext.agentSessionId ? success(session) : dim(session)),
-  ].join(dim(" · "));
+    `${accent("◆")} ${accent("QDash")}`,
+    `👤 ${profileText}`,
+    `💠 ${chipText}`,
+    `🤖 ${sessionText}`,
+  ].join(dim("  │  "));
 }
 
 function shortId(value: string, length = 10): string {
