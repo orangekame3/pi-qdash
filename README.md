@@ -68,13 +68,17 @@ Secrets such as `api_token`, passwords, and Cloudflare Access secrets are redact
 
 This package also provides `/skill:qdash`, which guides pi to choose the right QDash tools, avoid exposing secrets, and prefer read-only operations.
 
-## Command
+## Commands
 
 ```text
+/qdash-use-profile <profile>
+/qdash-use-chip [chip_id]
+/qdash-use-agent-session <session_id>
+/qdash-context
 /qdash-config [profile]
 ```
 
-Shows non-secret QDash configuration details in a pi widget.
+These commands manage session-local QDash context, update the pi status/widget, and show non-secret QDash configuration details. Tools use the current profile/chip context when their parameters are omitted.
 
 ## Development
 

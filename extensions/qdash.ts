@@ -101,6 +101,31 @@ type ConfirmableParams = {
   confirmWrite?: boolean;
 };
 
+type QDashContextState = {
+  profile?: string;
+  chipId?: string;
+  agentSessionId?: string;
+};
+
+const CONTEXT_ENTRY_TYPE = "qdash-context";
+let currentContext: QDashContextState = {};
+
+function applyQDashContext<T extends { profile?: string; chipId?: string; sessionId?: string }>(params: T): T {
+  return {
+    ...params,
+    profile: params.profile ?? currentContext.profile,
+    chipId: params.chipId ?? currentContext.chipId,
+    sessionId: params.sessionId ?? currentContext.agentSessionId,
+  };
+}
+
+function contextSummary(): string {
+  const profile = currentContext.profile ?? "env/default";
+  const chip = currentContext.chipId ?? "auto-chip";
+  const session = currentContext.agentSessionId ? ` session:${currentContext.agentSessionId}` : "";
+  return `qdash ${profile} ${chip}${session}`;
+}
+
 const QueryAction = Type.Union([
   Type.Literal("chips"),
   Type.Literal("default_chip"),
@@ -208,12 +233,13 @@ function shouldUseEnv(params: { useEnv?: boolean; profile?: string; configPath?:
 }
 
 async function makeClient(params: { useEnv?: boolean; profile?: string; configPath?: string }): Promise<QDashClient> {
+  params = applyQDashContext(params);
   if (shouldUseEnv(params)) return QDashClient.fromEnv();
   return QDashClient.fromProfile(params.profile ?? "default", params.configPath);
 }
 
 async function defaultChipId(client: QDashClient, chipId?: string): Promise<string> {
-  return chipId ?? client.getDefaultChipId();
+  return chipId ?? currentContext.chipId ?? client.getDefaultChipId();
 }
 
 async function rawGet<T>(client: QDashClient, path: string, query?: Record<string, unknown>): Promise<T> {
@@ -280,6 +306,7 @@ function configProfiles(configPath = defaultConfigPath()): { path: string; exist
 }
 
 async function executeQuery(params: QDashQueryParams) {
+  params = applyQDashContext(params);
   const client = await makeClient(params);
   switch (params.action) {
     case "chips": return client.listChips();
@@ -785,6 +812,67 @@ export default function qdashExtension(pi: ExtensionAPI) {
     },
   });
 
+  const persistContext = () => {
+    pi.appendEntry(CONTEXT_ENTRY_TYPE, { ...currentContext });
+  };
+
+  const refreshContextUi = (ctx: { ui: { setStatus: (key: string, value: string) => void; setWidget?: (key: string, lines: string[]) => void } }) => {
+    ctx.ui.setStatus("qdash", contextSummary());
+  };
+
+  pi.registerCommand("qdash-use-profile", {
+    description: "Set the current QDash profile for this pi session",
+    handler: async (args, ctx) => {
+      const profile = args.trim();
+      if (!profile) {
+        ctx.ui.notify("Usage: /qdash-use-profile <profile>", "warning");
+        return;
+      }
+      const client = await makeClient({ profile });
+      currentContext = { ...currentContext, profile };
+      persistContext();
+      refreshContextUi(ctx);
+      ctx.ui.notify(`QDash profile set to ${profile} (${client.config.baseUrl})`, "info");
+    },
+  });
+
+  pi.registerCommand("qdash-use-chip", {
+    description: "Set the current QDash chip ID for this pi session; omit the argument to use the default chip",
+    handler: async (args, ctx) => {
+      const requested = args.trim() || undefined;
+      const client = await makeClient({});
+      const chipId = requested ?? await client.getDefaultChipId();
+      currentContext = { ...currentContext, chipId };
+      persistContext();
+      refreshContextUi(ctx);
+      ctx.ui.notify(`QDash chip set to ${chipId}`, "info");
+    },
+  });
+
+  pi.registerCommand("qdash-use-agent-session", {
+    description: "Set the current QDash agent session ID for this pi session",
+    handler: async (args, ctx) => {
+      const agentSessionId = args.trim();
+      if (!agentSessionId) {
+        ctx.ui.notify("Usage: /qdash-use-agent-session <session_id>", "warning");
+        return;
+      }
+      currentContext = { ...currentContext, agentSessionId };
+      persistContext();
+      refreshContextUi(ctx);
+      ctx.ui.notify(`QDash agent session set to ${agentSessionId}`, "info");
+    },
+  });
+
+  pi.registerCommand("qdash-context", {
+    description: "Show the current QDash context",
+    handler: async (_args, ctx) => {
+      refreshContextUi(ctx);
+      ctx.ui.setWidget("qdash", JSON.stringify(currentContext, null, 2).split("\n"));
+      ctx.ui.notify(contextSummary(), "info");
+    },
+  });
+
   pi.registerCommand("qdash-config", {
     description: "Show non-secret QDash config/profile information",
     handler: async (args, ctx) => {
@@ -801,6 +889,11 @@ export default function qdashExtension(pi: ExtensionAPI) {
   });
 
   pi.on("session_start", (_event, ctx) => {
-    ctx.ui.setStatus("qdash", "qdash extension ready");
+    for (const entry of ctx.sessionManager.getEntries() as Array<{ type?: string; customType?: string; data?: unknown }>) {
+      if (entry.type === "custom" && entry.customType === CONTEXT_ENTRY_TYPE && entry.data && typeof entry.data === "object") {
+        currentContext = { ...(entry.data as QDashContextState) };
+      }
+    }
+    refreshContextUi(ctx);
   });
 }

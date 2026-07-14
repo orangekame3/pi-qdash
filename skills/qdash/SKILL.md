@@ -39,6 +39,19 @@ Use the pi-qdash tools instead of scraping the UI or hand-writing auth headers.
    - `forum_posts`, `provenance_stats`, `provenance_history`, `provenance_changes`, `provenance_lineage`, `provenance_impact`
 5. `qdash_raw_get` — read-only GET endpoints not covered by `qdash_query`.
 
+## Session context
+
+Use these commands to make pi behave like a QDash-specific harness with persistent session-local context:
+
+```text
+/qdash-use-profile <profile>
+/qdash-use-chip [chip_id]
+/qdash-use-agent-session <session_id>
+/qdash-context
+```
+
+Prefer the current context when the user has already selected a profile/chip/session. Tools use that context when parameters are omitted.
+
 ## Configuration
 
 The extension uses `@oqtopus-team/qdash-client` and supports:
