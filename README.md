@@ -80,6 +80,7 @@ This package also provides `/skill:qdash`, which guides pi to choose the right Q
 ## Commands
 
 ```text
+/qdash-setup [profile] [chip_id]
 /qdash-use-profile <profile>
 /qdash-use-chip [chip_id]
 /qdash-use-agent-session <session_id>
@@ -89,6 +90,8 @@ This package also provides `/skill:qdash`, which guides pi to choose the right Q
 /qdash-clear-context
 /qdash-config [profile]
 ```
+
+For the common path, install the package and run `/qdash-setup mackerel 144Qv1` in interactive pi. The setup command stores the session-local profile/chip context, refreshes the footer status line, and opens the dashboard widget.
 
 These commands manage session-local QDash context, update the pi status/widget, show or refresh a themed compact QDash dashboard, and show non-secret QDash configuration details. Tools use the current profile/chip context when their parameters are omitted. In interactive mode, the highlighted footer status line shows the active QDash profile, chip, and agent session.
 

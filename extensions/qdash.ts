@@ -1602,6 +1602,26 @@ export default function qdashExtension(pi: ExtensionAPI) {
     ctx.ui.setStatus("qdash", contextStatusLine(ctx.ui.theme));
   };
 
+  pi.registerCommand("qdash-setup", {
+    description: "Quickly configure QDash context; usage: /qdash-setup [profile] [chip_id]",
+    handler: async (args, ctx) => {
+      const [profileArg, chipArg] = args.trim().split(/\s+/).filter(Boolean);
+      const profile = profileArg ?? currentContext.profile ?? "default";
+      try {
+        const client = await makeClient({ profile });
+        const chipId = chipArg ?? currentContext.chipId ?? await client.getDefaultChipId();
+        currentContext = { ...currentContext, profile, chipId };
+        persistContext();
+        refreshContextUi(ctx);
+        const dashboard = await buildDashboard({ profile, chipId, limit: 5 });
+        ctx.ui.setWidget("qdash", (_tui, theme) => dashboardComponent(dashboard, theme));
+        ctx.ui.notify(`QDash setup complete: profile ${profile}, chip ${chipId}`, "info");
+      } catch (error) {
+        ctx.ui.notify(`QDash setup failed: ${error instanceof Error ? error.message : String(error)}`, "error");
+      }
+    },
+  });
+
   pi.registerCommand("qdash-use-profile", {
     description: "Set the current QDash profile for this pi session",
     handler: async (args, ctx) => {

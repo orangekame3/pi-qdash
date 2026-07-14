@@ -1,6 +1,6 @@
 {
   "name": "@orangekame3/pi-qdash",
-  "version": "0.15.6",
+  "version": "0.15.7",
   "description": "Pi extension for querying QDash via @oqtopus-team/qdash-client",
   "type": "module",
   "license": "Apache-2.0",
