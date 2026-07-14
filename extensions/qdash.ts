@@ -163,7 +163,7 @@ function contextStatusLine(theme?: Theme): string {
   return [
     `${accent("◆")} ${accent("QDash")}`,
     `👤 ${profileText}`,
-    `💠 ${chipText}`,
+    `${accent("▣")} ${chipText}`,
     `🤖 ${sessionText}`,
   ].join(dim("  │  "));
 }
