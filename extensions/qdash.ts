@@ -303,6 +303,14 @@ function toToolResult(data: unknown, details: Record<string, unknown> = {}) {
   };
 }
 
+function toTextToolResult(text: string, data: unknown, details: Record<string, unknown> = {}) {
+  const safeData = redact(data);
+  return {
+    content: [{ type: "text" as const, text }],
+    details: { ...details, data: safeData },
+  };
+}
+
 function configProfiles(configPath = defaultConfigPath()): { path: string; exists: boolean; profiles: string[] } {
   if (!existsSync(configPath)) return { path: configPath, exists: false, profiles: [] };
   const contents = readFileSync(configPath, "utf8");
@@ -385,7 +393,7 @@ async function buildDashboard(params: { profile?: string; configPath?: string; u
   const executionsPayload = value(recentExecutions);
   const failedTasksPayload = value(failedTaskResults);
   return {
-    context: { ...currentContext, chipId },
+    context: { ...currentContext, profile: params.profile ?? currentContext.profile, chipId },
     chips: value(chips),
     openIssues: {
       count: payloadTotal(issuesPayload),
@@ -971,7 +979,7 @@ export default function qdashExtension(pi: ExtensionAPI) {
     parameters: Type.Object({ ...connectionParams, ...chipScopedParams, limit: Type.Optional(Type.Number()) }),
     async execute(_toolCallId, params: { profile?: string; configPath?: string; useEnv?: boolean; chipId?: string; limit?: number }) {
       const dashboard = await buildDashboard(params);
-      return toToolResult(dashboard, { tool: "qdash_dashboard", lines: dashboardLines(dashboard) });
+      return toTextToolResult(dashboardLines(dashboard).join("\n"), dashboard, { tool: "qdash_dashboard", lines: dashboardLines(dashboard) });
     },
     renderCall(args, theme) {
       const profile = args.profile ?? currentContext.profile ?? "context";
@@ -993,7 +1001,7 @@ export default function qdashExtension(pi: ExtensionAPI) {
     parameters: Type.Object({ ...connectionParams, ...chipScopedParams, limit: Type.Optional(Type.Number()) }),
     async execute(_toolCallId, params: { profile?: string; configPath?: string; useEnv?: boolean; chipId?: string; limit?: number }) {
       const dashboard = await buildDashboard(params);
-      return toToolResult({
+      const triage = {
         context: dashboard.context,
         openIssues: dashboard.openIssues,
         failedTaskResults: dashboard.failedTaskResults,
@@ -1001,7 +1009,19 @@ export default function qdashExtension(pi: ExtensionAPI) {
           dashboard.failedTaskResults.count > 0 ? "Review failed task results first." : undefined,
           dashboard.openIssues.count > 0 ? "Review open issues and correlate with recent executions." : undefined,
         ].filter(Boolean),
-      }, { tool: "qdash_triage_overview" });
+      };
+      const lines = [
+        "QDash Triage",
+        `open issues ${triage.openIssues.count}`,
+        `failed tasks ${triage.failedTaskResults.shown}/${triage.failedTaskResults.count}`,
+        "",
+        "Suggested focus",
+        ...(triage.suggestedFocus.length > 0 ? triage.suggestedFocus.map((item) => `  - ${item}`) : ["  none"]),
+        "",
+        "Failed task results",
+        ...(dashboard.failedTaskResults.items.length > 0 ? dashboard.failedTaskResults.items.map((item, index) => `  ${formatItem(item, `task-${index + 1}`)}`) : ["  none"]),
+      ];
+      return toTextToolResult(lines.join("\n"), triage, { tool: "qdash_triage_overview" });
     },
     renderResult(result, _options, theme) {
       const data = (result.details as { data?: { openIssues?: { count?: number }; failedTaskResults?: { count?: number }; suggestedFocus?: string[] } } | undefined)?.data;
