@@ -74,7 +74,7 @@ pi install git:github.com/orangekame3/pi-qdash
 
 Secrets such as `api_token`, passwords, and Cloudflare Access secrets are redacted from tool output. Write-oriented agent/forum workflow tools are approval-gated: interactive pi shows a confirmation prompt, and non-interactive runs require `confirmWrite: true`.
 
-Forum read tools render compact boxed summaries for list/detail/reply views. Figure tools fetch calibration PNG/JSON figures by path or task result through qdash-client helpers, and render images in interactive TUI. Forum write tools are available as confirmation-gated operations: `qdash_create_forum_post`, `qdash_update_forum_post`, and `qdash_create_forum_evidence_reply`. The evidence-reply helper builds a markdown reply from a task result, embeds figures so they are visible in the forum, links recent same-task history, and marks the reply with `— by pi-qdash`.
+Forum read tools render compact boxed summaries for list/detail/reply views. Figure tools fetch calibration PNG/JSON figures by path or task result through qdash-client helpers, and render images in interactive TUI. Forum write tools are available as confirmation-gated operations: `qdash_create_forum_post`, `qdash_update_forum_post`, and `qdash_create_forum_evidence_reply`. The evidence-reply helper builds a markdown reply from a task result, embeds figures so they are visible in the forum, links recent same-task history, and marks the reply with `— 🤖 by pi-qdash`.
 
 ## Skill
 

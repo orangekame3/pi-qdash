@@ -1040,7 +1040,7 @@ async function buildForumEvidenceReply(client: QDashClient, params: ForumEvidenc
     "",
     params.interpretation,
     "",
-    "— by pi-qdash",
+    "— 🤖 by pi-qdash",
   ].join("\n");
   // Keep content_blocks empty so QDash renders the markdown `content` directly.
   // The current forum UI reliably renders markdown links and images, while BlockNote
