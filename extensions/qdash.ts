@@ -988,6 +988,14 @@ function taskFigurePaths(task: Record<string, unknown>, maxFigures: number): str
   return Array.isArray(paths) ? paths.filter((item): item is string => typeof item === "string").slice(0, maxFigures) : [];
 }
 
+function textInline(text: string) {
+  return { type: "text", text, styles: {} };
+}
+
+function linkInline(text: string, href: string) {
+  return { type: "link", href, content: [textInline(text)] };
+}
+
 async function buildForumEvidenceReply(client: QDashClient, params: ForumEvidenceReplyParams) {
   const [parent, task] = await Promise.all([
     client.getForumPost(params.parentPostId) as unknown as Promise<Record<string, unknown>>,
@@ -1013,8 +1021,8 @@ async function buildForumEvidenceReply(client: QDashClient, params: ForumEvidenc
     "",
     `${target} の \`${taskName}\` から evidence を追加します。`,
     "",
-    `- task: ${taskUrl}`,
-    ...(executionUrl ? [`- execution: ${executionUrl}`] : []),
+    `- [task](${taskUrl})`,
+    ...(executionUrl ? [`- [execution](${executionUrl})`] : []),
     ...(message ? [`- message: \`${message}\``] : []),
     ...(figures.length > 0 ? ["", figureMarkdown] : []),
     "",
@@ -1022,11 +1030,13 @@ async function buildForumEvidenceReply(client: QDashClient, params: ForumEvidenc
   ].join("\n");
   const paragraphProps = { backgroundColor: "default", textColor: "default", textAlignment: "left" };
   const contentBlocks = [
-    { id: randomUUID(), type: "heading", props: { ...paragraphProps, level: 2, isToggleable: false }, content: [{ type: "text", text: title, styles: {} }], children: [] },
-    { id: randomUUID(), type: "paragraph", props: paragraphProps, content: [{ type: "text", text: `${target} の ${taskName} から evidence を追加します。`, styles: {} }], children: [] },
-    { id: randomUUID(), type: "paragraph", props: paragraphProps, content: [{ type: "text", text: [`task: ${taskUrl}`, executionUrl ? `execution: ${executionUrl}` : undefined, message ? `message: ${message}` : undefined].filter(Boolean).join("\n"), styles: {} }], children: [] },
+    { id: randomUUID(), type: "heading", props: { ...paragraphProps, level: 2, isToggleable: false }, content: [textInline(title)], children: [] },
+    { id: randomUUID(), type: "paragraph", props: paragraphProps, content: [textInline(`${target} の ${taskName} から evidence を追加します。`)], children: [] },
+    { id: randomUUID(), type: "bulletListItem", props: paragraphProps, content: [textInline("task: "), linkInline("open task result", taskUrl)], children: [] },
+    ...(executionUrl ? [{ id: randomUUID(), type: "bulletListItem", props: paragraphProps, content: [textInline("execution: "), linkInline("open execution", executionUrl)], children: [] }] : []),
+    ...(message ? [{ id: randomUUID(), type: "bulletListItem", props: paragraphProps, content: [textInline(`message: ${message}`)], children: [] }] : []),
     ...figures.map((path) => ({ id: randomUUID(), type: "image", props: { textAlignment: "left", backgroundColor: "default", name: filenameFromFigurePath(path), url: figureApiUrl(path), caption: `${target} ${taskName}${executionId ? `, execution ${executionId}` : ""}`, showPreview: true }, children: [] })),
-    { id: randomUUID(), type: "paragraph", props: paragraphProps, content: [{ type: "text", text: params.interpretation, styles: {} }], children: [] },
+    { id: randomUUID(), type: "paragraph", props: paragraphProps, content: [textInline(params.interpretation)], children: [] },
   ];
   const request = {
     category,
@@ -1102,7 +1112,9 @@ function inlineContentText(value: unknown): string {
     if (typeof item === "string") return item;
     if (!item || typeof item !== "object") return "";
     const object = item as Record<string, unknown>;
-    return typeof object.text === "string" ? object.text : "";
+    if (typeof object.text === "string") return object.text;
+    if (object.type === "link") return inlineContentText(object.content);
+    return "";
   }).join("");
 }
 
