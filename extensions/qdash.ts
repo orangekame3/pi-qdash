@@ -149,6 +149,22 @@ function contextSummary(): string {
   return `qdash ${profile} ${chip}${session}`;
 }
 
+function contextStatusLine(theme?: Theme): string {
+  const accent = (value: string) => theme ? theme.fg("accent", value) : value;
+  const dim = (value: string) => theme ? theme.fg("dim", value) : value;
+  const success = (value: string) => theme ? theme.fg("success", value) : value;
+  const warn = (value: string) => theme ? theme.fg("warning", value) : value;
+  const profile = currentContext.profile ?? (shouldUseEnv({}) ? "env" : "default");
+  const chip = currentContext.chipId ?? "auto";
+  const session = currentContext.agentSessionId ? shortId(currentContext.agentSessionId, 8) : "none";
+  return [
+    accent("QDash"),
+    dim("profile") + " " + success(profile),
+    dim("chip") + " " + (currentContext.chipId ? success(chip) : warn(chip)),
+    dim("session") + " " + (currentContext.agentSessionId ? success(session) : dim(session)),
+  ].join(dim(" · "));
+}
+
 function shortId(value: string, length = 10): string {
   return value.length > length ? `${value.slice(0, length)}…` : value;
 }
@@ -1579,8 +1595,8 @@ export default function qdashExtension(pi: ExtensionAPI) {
     pi.appendEntry(CONTEXT_ENTRY_TYPE, { ...currentContext });
   };
 
-  const refreshContextUi = (ctx: { ui: { setStatus: (key: string, value: string) => void; setWidget?: (key: string, lines: string[]) => void } }) => {
-    ctx.ui.setStatus("qdash", contextSummary());
+  const refreshContextUi = (ctx: { ui: { theme?: Theme; setStatus: (key: string, value: string) => void; setWidget?: (key: string, lines: string[]) => void } }) => {
+    ctx.ui.setStatus("qdash", contextStatusLine(ctx.ui.theme));
   };
 
   pi.registerCommand("qdash-use-profile", {
