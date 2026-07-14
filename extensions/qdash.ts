@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 import { existsSync, readFileSync } from "node:fs";
 
 import type { ExtensionAPI, Theme } from "@earendil-works/pi-coding-agent";
-import { QDashClient, defaultConfigPath } from "@oqtopus-team/qdash-client";
+import { QDashClient, defaultConfigPath, type DownloadedFile, type TaskResultFigureOptions } from "@oqtopus-team/qdash-client";
 import { Image, Text, truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
 import { Type } from "typebox";
 
@@ -273,47 +273,11 @@ async function rawGet<T>(client: QDashClient, path: string, query?: Record<strin
   return (client as unknown as { get<T>(path: string, query?: Record<string, unknown>): Promise<T> }).get(path, cleanQuery(query));
 }
 
-async function rawArrayBuffer(client: QDashClient, path: string, query?: Record<string, unknown>): Promise<ArrayBuffer> {
-  return (client as unknown as { transport: { request<T>(config: unknown): Promise<T> } }).transport.request<ArrayBuffer>({
-    method: "GET",
-    url: path,
-    params: cleanQuery(query),
-    responseType: "arraybuffer",
-  });
-}
-
-type DownloadedFigureFile = {
-  data: ArrayBuffer;
-  mediaType: string;
-  filename?: string;
-  path?: string;
-  figurePaths?: string[];
-  jsonFigurePaths?: string[];
+type TaskResultFigureFile = DownloadedFile & {
+  path: string;
+  figurePaths: string[];
+  jsonFigurePaths: string[];
 };
-
-async function getExecutionFigureFile(client: QDashClient, path: string): Promise<DownloadedFigureFile> {
-  const modern = client as unknown as { getExecutionFigure?: (path: string) => Promise<DownloadedFigureFile> };
-  if (typeof modern.getExecutionFigure === "function") return modern.getExecutionFigure(path);
-  return {
-    data: await rawArrayBuffer(client, "/executions/figure", { path }),
-    mediaType: mediaTypeForPath(path),
-    filename: path.split("/").filter(Boolean).at(-1),
-    path,
-  };
-}
-
-async function getTaskResultFigureFile(client: QDashClient, taskId: string, options: { index?: number; preferJson?: boolean } = {}): Promise<DownloadedFigureFile> {
-  const modern = client as unknown as { getTaskResultFigure?: (taskId: string, options?: { index?: number; preferJson?: boolean }) => Promise<DownloadedFigureFile> };
-  if (typeof modern.getTaskResultFigure === "function") return modern.getTaskResultFigure(taskId, options);
-
-  const task = await client.getTaskResult(taskId) as unknown as { figure_path?: string[]; json_figure_path?: string[] };
-  const figurePaths = Array.isArray(task.figure_path) ? task.figure_path : [];
-  const jsonFigurePaths = Array.isArray(task.json_figure_path) ? task.json_figure_path : [];
-  const paths = options.preferJson && jsonFigurePaths.length > 0 ? jsonFigurePaths : figurePaths;
-  const path = paths[options.index ?? 0];
-  if (!path) throw new Error(`No figure at index ${options.index ?? 0} for task result '${taskId}'`);
-  return { ...(await getExecutionFigureFile(client, path)), path, figurePaths, jsonFigurePaths };
-}
 
 function cleanQuery(values: Record<string, unknown> = {}): Record<string, unknown> {
   return Object.fromEntries(Object.entries(values).filter(([, value]) => value !== undefined && value !== null));
@@ -681,12 +645,12 @@ function mediaTypeForPath(path: string): string {
 }
 
 async function fetchFigureDetails(client: QDashClient, path: string): Promise<FigureDetails> {
-  const file = await getExecutionFigureFile(client, path);
+  const file = await client.getExecutionFigure(path);
   const bytes = Buffer.from(file.data);
   const mediaType = file.mediaType || mediaTypeForPath(path);
   const details: FigureDetails = {
     tool: "qdash_get_figure",
-    path: file.path ?? path,
+    path,
     mediaType,
     sizeBytes: bytes.byteLength,
   };
@@ -1477,7 +1441,8 @@ export default function qdashExtension(pi: ExtensionAPI) {
     async execute(_toolCallId, params: { profile?: string; configPath?: string; useEnv?: boolean; taskId: string; index?: number; preferJson?: boolean }) {
       const client = await makeClient(params);
       try {
-        const file = await getTaskResultFigureFile(client, params.taskId, { index: params.index, preferJson: params.preferJson });
+        const options: TaskResultFigureOptions = { index: params.index, preferJson: params.preferJson };
+        const file: TaskResultFigureFile = await client.getTaskResultFigure(params.taskId, options);
         const bytes = Buffer.from(file.data);
         const mediaType = file.mediaType || mediaTypeForPath(file.path ?? "");
         const details: FigureDetails = {
