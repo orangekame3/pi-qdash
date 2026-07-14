@@ -10,16 +10,22 @@ Install dependencies in this repository:
 npm install
 ```
 
-Try it temporarily:
+Try the local package temporarily from the repository root:
 
 ```bash
-pi -e /Users/orangekame3/src/github.com/orangekame3/pi-qdash
+pi -e .
 ```
 
-Install it for regular use:
+Install the local package for regular use:
 
 ```bash
-pi install /Users/orangekame3/src/github.com/orangekame3/pi-qdash
+pi install "$(pwd)"
+```
+
+Or install it from GitHub:
+
+```bash
+pi install git:github.com/orangekame3/pi-qdash
 ```
 
 ## Tools
