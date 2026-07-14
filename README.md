@@ -46,7 +46,7 @@ pi install git:github.com/orangekame3/pi-qdash
 - Dedicated read-only tools:
   - `qdash_list_chips`, `qdash_get_default_chip`
   - `qdash_get_chip_metrics`, `qdash_list_chip_qubits`, `qdash_list_chip_couplings`
-  - `qdash_get_timeseries`
+  - `qdash_get_timeseries`, `qdash_plot_timeseries`
   - `qdash_list_task_results`, `qdash_get_task_result`
   - `qdash_list_issues`
   - `qdash_list_flows`, `qdash_get_flow`
@@ -54,8 +54,11 @@ pi install git:github.com/orangekame3/pi-qdash
   - `qdash_list_ai_reviews`, `qdash_get_provenance_stats`
   - `qdash_list_forum_posts`, `qdash_get_forum_post`, `qdash_list_forum_replies`
   - `qdash_get_figure`, `qdash_get_task_figures`
-- Harness overview tools:
+- Harness overview and insight tools:
   - `qdash_dashboard`
+  - `qdash_dashboard_insights`
+  - `qdash_recent_calibration_summary`
+  - `qdash_recommend_next_action`
   - `qdash_triage_overview`
 - Agent calibration workflow tools:
   - `qdash_create_agent_session`
@@ -71,7 +74,7 @@ pi install git:github.com/orangekame3/pi-qdash
 
 Secrets such as `api_token`, passwords, and Cloudflare Access secrets are redacted from tool output. Write-oriented agent/forum workflow tools are approval-gated: interactive pi shows a confirmation prompt, and non-interactive runs require `confirmWrite: true`.
 
-Forum read tools render compact boxed summaries for list/detail/reply views. Figure tools fetch calibration PNG/JSON figures by path or task result through qdash-client helpers, and render images in interactive TUI. Forum write tools are available as confirmation-gated operations: `qdash_create_forum_post` and `qdash_update_forum_post`.
+Forum read tools render compact boxed summaries for list/detail/reply views. Figure tools fetch calibration PNG/JSON figures by path or task result through qdash-client helpers, and render images in interactive TUI. Forum write tools are available as confirmation-gated operations: `qdash_create_forum_post`, `qdash_update_forum_post`, and `qdash_create_forum_evidence_reply`. The evidence-reply helper builds a reply from a task result and embeds figures as QDash UI image blocks so they are visible in the forum.
 
 ## Skill
 

@@ -138,6 +138,7 @@ const WRITE_TOOL_NAMES = new Set([
   "qdash_apply_agent_candidate_commit",
   "qdash_create_forum_post",
   "qdash_update_forum_post",
+  "qdash_create_forum_evidence_reply",
 ]);
 let currentContext: QDashContextState = {};
 
@@ -416,10 +417,12 @@ function qdashObjectLinks(client: QDashClient, object: Record<string, unknown>):
   const taskId = firstString(object, ["task_id", "taskId"]);
   const executionId = firstString(object, ["execution_id", "executionId"]);
   const postId = firstString(object, ["post_id", "forum_post_id", "id"]);
+  const issueId = firstString(object, ["issue_id"]);
   const sessionId = firstString(object, ["session_id", "sessionId"]);
   if (taskId) links.task_result = qdashWebUrl(client, `/task-results/${encodeURIComponent(taskId)}`);
   if (executionId) links.execution = qdashWebUrl(client, `/executions/${encodeURIComponent(executionId)}`);
   if (postId) links.forum_post = qdashWebUrl(client, `/forum/posts/${encodeURIComponent(postId)}`);
+  if (issueId) links.issue = qdashWebUrl(client, `/issues/${encodeURIComponent(issueId)}`);
   if (sessionId) links.agent_session = qdashWebUrl(client, `/agent-sessions/${encodeURIComponent(sessionId)}`);
   return links;
 }
@@ -836,6 +839,207 @@ function recommendationLines(recommendations: RecommendedNextAction[], color = f
     ...(item.links.task_result ? [`    ${muted("task")} ${item.links.task_result}`] : []),
     ...(item.links.execution ? [`    ${muted("exec")} ${item.links.execution}`] : []),
   ]) : [muted("no recent calibration target found")], color);
+}
+
+type DashboardInsight = {
+  target: string;
+  severity: "critical" | "warning" | "info";
+  title: string;
+  evidence: string[];
+  suggestion: string;
+  links: Record<string, string[]>;
+};
+
+type DashboardInsightsResult = {
+  context: { profile?: string; chipId: string; webBaseUrl: string };
+  insights: DashboardInsight[];
+};
+
+function targetFromText(text: string): string | undefined {
+  const coupling = text.match(/Q?0*(\d{1,3})\s*[-–]\s*Q?0*(\d{1,3})/i);
+  if (coupling) return `c${Number(coupling[1])}-${Number(coupling[2])}`;
+  const qubit = text.match(/\bQ0*(\d{1,3})\b/i);
+  return qubit ? `q${Number(qubit[1])}` : undefined;
+}
+
+function addEvidence(map: Map<string, DashboardInsight>, target: string, severity: DashboardInsight["severity"], title: string, evidence: string, suggestion: string, links: Record<string, string> = {}) {
+  const existing = map.get(target);
+  const rank = { info: 0, warning: 1, critical: 2 } as const;
+  if (!existing) {
+    map.set(target, { target, severity, title, evidence: [evidence], suggestion, links: Object.fromEntries(Object.entries(links).map(([key, value]) => [key, [value]])) });
+    return;
+  }
+  if (rank[severity] > rank[existing.severity]) existing.severity = severity;
+  if (!existing.evidence.includes(evidence)) existing.evidence.push(evidence);
+  for (const [key, value] of Object.entries(links)) existing.links[key] = [...(existing.links[key] ?? []), value];
+}
+
+function addMetricInsights(map: Map<string, DashboardInsight>, metrics: unknown, client: QDashClient) {
+  if (!metrics || typeof metrics !== "object") return;
+  const qubitMetrics = (metrics as Record<string, unknown>).qubit_metrics;
+  if (!qubitMetrics || typeof qubitMetrics !== "object") return;
+  const metricObject = qubitMetrics as Record<string, unknown>;
+  const checks: Array<{ name: string; threshold: number; direction: "below"; label: string }> = [
+    { name: "t1", threshold: 5, direction: "below", label: "low T1" },
+    { name: "t2_echo", threshold: 2, direction: "below", label: "low T2 echo" },
+    { name: "average_readout_fidelity", threshold: 0.8, direction: "below", label: "low readout fidelity" },
+    { name: "average_gate_fidelity", threshold: 0.98, direction: "below", label: "low 1Q gate fidelity" },
+  ];
+  for (const check of checks) {
+    const values = metricObject[check.name];
+    if (!values || typeof values !== "object") continue;
+    for (const [qid, item] of Object.entries(values as Record<string, unknown>)) {
+      if (!item || typeof item !== "object") continue;
+      const value = (item as Record<string, unknown>).value;
+      if (typeof value !== "number" || !Number.isFinite(value) || value >= check.threshold) continue;
+      const links = qdashObjectLinks(client, item as Record<string, unknown>);
+      addEvidence(map, `q${qid}`, check.name === "t1" || check.name === "t2_echo" ? "warning" : "info", `${check.label} on q${qid}`, `${check.name}=${formatNumber(value)} below ${check.threshold}`, `Inspect ${check.name} history and related failed tasks/forum notes.`, links);
+    }
+  }
+}
+
+async function buildDashboardInsights(params: { profile?: string; configPath?: string; useEnv?: boolean; chipId?: string; limit?: number; withinHours?: number }): Promise<DashboardInsightsResult> {
+  params = applyQDashContext(params);
+  const client = await makeClient(params);
+  const chipId = await defaultChipId(client, params.chipId);
+  const limit = params.limit ?? 30;
+  const end = new Date();
+  const start = new Date(end.getTime() - (params.withinHours ?? 168) * 3600_000);
+  const [forums, issues, failed, metrics] = await Promise.allSettled([
+    client.listForumPosts({ chipId, status: "open", limit }),
+    rawGet(client, "/issues", { is_closed: false, limit }),
+    rawGet(client, "/task-results", { chip_id: chipId, status: "failed", start_from: start.toISOString(), start_to: end.toISOString(), limit }),
+    client.getChipMetrics(chipId),
+  ]);
+  const value = <T>(result: PromiseSettledResult<T>): T | undefined => result.status === "fulfilled" ? result.value : undefined;
+  const insightMap = new Map<string, DashboardInsight>();
+
+  for (const post of forumPostsFromPayload(value(forums))) {
+    const targetType = firstString(post, ["target_type"]);
+    const targetId = firstString(post, ["target_id", "qid"]);
+    const title = forumPostTitle(post);
+    const target = targetId ? (targetType === "coupling" ? `c${targetId}` : `q${targetId}`) : targetFromText(title);
+    if (!target) continue;
+    const lower = title.toLowerCase();
+    const severity: DashboardInsight["severity"] = /tls|死|衝突|leak|リーク|不安定|見えない/.test(lower) ? "warning" : "info";
+    addEvidence(insightMap, target, severity, title, `forum: ${title}`, "Open forum context should be reviewed before calibration changes.", qdashObjectLinks(client, post));
+  }
+
+  for (const issue of arrayFromPayload(value(issues)).filter((item): item is Record<string, unknown> => Boolean(item) && typeof item === "object")) {
+    const title = firstString(issue, ["title", "summary"]) ?? "open issue";
+    const target = targetFromText(title) ?? firstString(issue, ["qid"]);
+    if (!target) continue;
+    addEvidence(insightMap, target.startsWith("q") || target.startsWith("c") ? target : `q${target}`, "warning", title, `open issue: ${title}`, "Resolve or account for the open issue before trusting metrics.", qdashObjectLinks(client, issue));
+  }
+
+  for (const task of arrayFromPayload(value(failed)).filter((item): item is Record<string, unknown> => Boolean(item) && typeof item === "object")) {
+    const target = calibrationTarget(task);
+    const taskName = firstString(task, ["task_name", "name"]) ?? "task";
+    const message = firstString(task, ["message"]) ?? "failed";
+    addEvidence(insightMap, target, "warning", `${taskName} failed on ${target}`, `failed ${taskName}: ${message}`, "Inspect the failed task figures and recent history before continuing calibration.", qdashObjectLinks(client, task));
+  }
+
+  addMetricInsights(insightMap, value(metrics), client);
+
+  const insights = [...insightMap.values()].sort((a, b) => {
+    const rank = { critical: 2, warning: 1, info: 0 } as const;
+    return rank[b.severity] - rank[a.severity] || b.evidence.length - a.evidence.length;
+  }).slice(0, limit);
+  return { context: { profile: params.profile ?? currentContext.profile, chipId, webBaseUrl: qdashWebBaseUrl(client) }, insights };
+}
+
+function dashboardInsightLines(result: DashboardInsightsResult, color = false): string[] {
+  const accent = (text: string) => color ? ansi("1;36", text) : text;
+  const muted = (text: string) => color ? ansi("90", text) : text;
+  const sev = (severity: string) => severity === "critical" ? "‼" : severity === "warning" ? "!" : "i";
+  const body = [
+    `${muted("profile")} ${accent(result.context.profile ?? "env/default")}  ${muted("chip")} ${accent(result.context.chipId)}`,
+    `${muted("url")} ${result.context.webBaseUrl}`,
+    "",
+    ...(result.insights.length > 0 ? result.insights.flatMap((insight) => [
+      `${sev(insight.severity)} ${accent(insight.target)} ${muted(`[${insight.severity}]`)} ${insight.title}`,
+      ...insight.evidence.slice(0, 4).map((line) => `    - ${line}`),
+      `    ${muted("suggest")} ${insight.suggestion}`,
+      ...Object.entries(insight.links).flatMap(([kind, urls]) => urls.slice(0, 2).map((url) => `    ${muted(kind)} ${url}`)),
+    ]) : [muted("no insights from current dashboard/forum/metrics data")]),
+  ];
+  return boxed("QDash Dashboard Insights", body, color);
+}
+
+type ForumEvidenceReplyParams = {
+  parentPostId: string;
+  taskId: string;
+  interpretation: string;
+  title?: string;
+  includeFigures?: boolean;
+  maxFigures?: number;
+};
+
+function filenameFromFigurePath(path: string): string {
+  return path.split("/").filter(Boolean).pop() ?? "figure.png";
+}
+
+function figureApiUrl(path: string): string {
+  return `/api/executions/figure?path=${encodeURIComponent(path)}`;
+}
+
+function taskFigurePaths(task: Record<string, unknown>, maxFigures: number): string[] {
+  const paths = task.figure_path;
+  return Array.isArray(paths) ? paths.filter((item): item is string => typeof item === "string").slice(0, maxFigures) : [];
+}
+
+async function buildForumEvidenceReply(client: QDashClient, params: ForumEvidenceReplyParams) {
+  const [parent, task] = await Promise.all([
+    client.getForumPost(params.parentPostId) as unknown as Promise<Record<string, unknown>>,
+    client.getTaskResult(params.taskId) as unknown as Promise<Record<string, unknown>>,
+  ]);
+  const taskName = firstString(task, ["task_name", "taskName"]) ?? "task";
+  const qid = firstString(task, ["qid"]);
+  const couplingId = firstString(task, ["coupling_id", "couplingId"]);
+  const target = couplingId ? `coupling ${couplingId}` : qid ? `Q${qid}` : "target";
+  const executionId = firstString(task, ["execution_id", "executionId"]);
+  const message = firstString(task, ["message"]) ?? "";
+  const chipId = firstString(task, ["chip_id", "chipId"]) ?? firstString(parent, ["chip_id", "chipId"]);
+  const category = firstString(parent, ["category"]) ?? (couplingId ? "coupling" : "qubit");
+  const targetType = firstString(parent, ["target_type", "targetType"]) ?? (couplingId ? "coupling" : qid ? "qubit" : undefined);
+  const targetId = firstString(parent, ["target_id", "targetId"]) ?? couplingId ?? qid;
+  const title = params.title ?? `${new Date().toISOString().slice(0, 10)} 追加観測: ${target} ${taskName}`;
+  const taskUrl = qdashWebUrl(client, `/task-results/${encodeURIComponent(params.taskId)}`);
+  const executionUrl = executionId ? qdashWebUrl(client, `/executions/${encodeURIComponent(executionId)}`) : undefined;
+  const figures = params.includeFigures === false ? [] : taskFigurePaths(task, params.maxFigures ?? 2);
+  const figureMarkdown = figures.map((path) => `![${filenameFromFigurePath(path)}](${figureApiUrl(path)})`).join("\n\n");
+  const content = [
+    `## ${title}`,
+    "",
+    `${target} の \`${taskName}\` から evidence を追加します。`,
+    "",
+    `- task: ${taskUrl}`,
+    ...(executionUrl ? [`- execution: ${executionUrl}`] : []),
+    ...(message ? [`- message: \`${message}\``] : []),
+    ...(figures.length > 0 ? ["", figureMarkdown] : []),
+    "",
+    params.interpretation,
+  ].join("\n");
+  const paragraphProps = { backgroundColor: "default", textColor: "default", textAlignment: "left" };
+  const contentBlocks = [
+    { id: randomUUID(), type: "heading", props: { ...paragraphProps, level: 2, isToggleable: false }, content: [{ type: "text", text: title, styles: {} }], children: [] },
+    { id: randomUUID(), type: "paragraph", props: paragraphProps, content: [{ type: "text", text: `${target} の ${taskName} から evidence を追加します。`, styles: {} }], children: [] },
+    { id: randomUUID(), type: "paragraph", props: paragraphProps, content: [{ type: "text", text: [`task: ${taskUrl}`, executionUrl ? `execution: ${executionUrl}` : undefined, message ? `message: ${message}` : undefined].filter(Boolean).join("\n"), styles: {} }], children: [] },
+    ...figures.map((path) => ({ id: randomUUID(), type: "image", props: { textAlignment: "left", backgroundColor: "default", name: filenameFromFigurePath(path), url: figureApiUrl(path), caption: `${target} ${taskName}${executionId ? `, execution ${executionId}` : ""}`, showPreview: true }, children: [] })),
+    { id: randomUUID(), type: "paragraph", props: paragraphProps, content: [{ type: "text", text: params.interpretation, styles: {} }], children: [] },
+  ];
+  const request = {
+    category,
+    title: null,
+    content,
+    content_blocks: contentBlocks,
+    parent_id: params.parentPostId,
+    chip_id: chipId,
+    target_type: targetType,
+    target_id: targetId,
+    status: firstString(parent, ["status"]) ?? "open",
+  };
+  return { request, preview: content, parent, task, figures };
 }
 
 function forumPostsFromPayload(payload: unknown): Record<string, unknown>[] {
@@ -1846,6 +2050,37 @@ export default function qdashExtension(pi: ExtensionAPI) {
   });
 
   pi.registerTool({
+    name: "qdash_create_forum_evidence_reply",
+    label: "QDash Create Forum Evidence Reply",
+    description: "Create a QDash forum reply from a task result, embedding task figures as visible QDash UI image blocks. This is a write operation and requires confirmation.",
+    promptSnippet: "Create a QDash forum evidence reply with visible task figures after explicit confirmation",
+    promptGuidelines: ["Use qdash_create_forum_evidence_reply when adding investigated task evidence to an existing forum thread; show the generated content and require confirmation before writing."],
+    parameters: Type.Object({
+      ...connectionParams,
+      parentPostId: Type.String(),
+      taskId: Type.String(),
+      interpretation: Type.String({ description: "Human-readable interpretation or hypothesis to append after the task links and figures." }),
+      title: Type.Optional(Type.String()),
+      includeFigures: Type.Optional(Type.Boolean()),
+      maxFigures: Type.Optional(Type.Number()),
+      confirmWrite: Type.Optional(Type.Boolean()),
+    }),
+    async execute(_toolCallId, params: ConfirmableParams & { profile?: string; configPath?: string; useEnv?: boolean; parentPostId: string; taskId: string; interpretation: string; title?: string; includeFigures?: boolean; maxFigures?: number }, _signal, _onUpdate, ctx) {
+      const client = await makeClient(params);
+      const built = await buildForumEvidenceReply(client, params);
+      if (!params.confirmWrite) {
+        const confirmed = ctx.hasUI && await ctx.ui.confirm("Create QDash forum evidence reply?", built.preview.slice(0, 1800));
+        if (!confirmed) throw new Error("qdash_create_forum_evidence_reply requires explicit confirmation");
+      }
+      const data = await client.createForumPost(built.request as never);
+      const postId = firstString(data as unknown as Record<string, unknown>, ["id"]);
+      const parentUrl = qdashWebUrl(client, `/forum/posts/${encodeURIComponent(params.parentPostId)}`);
+      const text = [`created forum evidence reply${postId ? ` ${postId}` : ""}`, `parent ${parentUrl}`, "", built.preview].join("\n");
+      return toTextToolResult(text, { reply: data, preview: built.preview, figures: built.figures }, { tool: "qdash_create_forum_evidence_reply", url: parentUrl });
+    },
+  });
+
+  pi.registerTool({
     name: "qdash_update_forum_post",
     label: "QDash Update Forum Post",
     description: "Update a QDash forum post. This is a write operation and requires confirmation.",
@@ -2047,6 +2282,29 @@ export default function qdashExtension(pi: ExtensionAPI) {
       const details = result.details as { data?: Awaited<ReturnType<typeof buildDashboard>> } | undefined;
       if (details?.data) return dashboardComponent(details.data, theme);
       return new Text(theme.fg("dim", "QDash dashboard unavailable"), 0, 0);
+    },
+  });
+
+  pi.registerTool({
+    name: "qdash_dashboard_insights",
+    label: "QDash Dashboard Insights",
+    description: "Correlate dashboard metrics, open forum posts, notes/issues, and failed tasks into target-level insights with links.",
+    promptSnippet: "Generate QDash target insights from dashboard metrics, forum links, notes, and failed tasks",
+    promptGuidelines: ["Use qdash_dashboard_insights when the user asks for insights across dashboard metrics, target summaries, forum posts, notes, issues, or anomalous targets."],
+    parameters: Type.Object({
+      ...connectionParams,
+      chipId: Type.Optional(Type.String()),
+      limit: Type.Optional(Type.Number()),
+      withinHours: Type.Optional(Type.Number()),
+      color: Type.Optional(Type.Boolean({ description: "Emit ANSI colors in text output for terminal display." })),
+    }),
+    async execute(_toolCallId, params: { profile?: string; configPath?: string; useEnv?: boolean; chipId?: string; limit?: number; withinHours?: number; color?: boolean }) {
+      const result = await buildDashboardInsights(params);
+      return toTextToolResult(dashboardInsightLines(result, params.color).join("\n"), result, { tool: "qdash_dashboard_insights", webBaseUrl: result.context.webBaseUrl });
+    },
+    renderResult(result, _options, theme) {
+      const data = (result.details as { data?: DashboardInsightsResult } | undefined)?.data;
+      return data ? textComponent(dashboardInsightLines(data).join("\n").split("\n"), theme) : textComponent(["No dashboard insights"], theme);
     },
   });
 

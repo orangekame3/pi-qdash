@@ -21,8 +21,10 @@ Use the pi-qdash tools instead of scraping the UI or hand-writing auth headers.
    - `qdash_list_ai_reviews`, `qdash_get_provenance_stats`
    - `qdash_list_forum_posts`, `qdash_get_forum_post`, `qdash_list_forum_replies`
    - `qdash_get_figure`, `qdash_get_task_figures`
+   - `qdash_create_forum_evidence_reply` for confirmed evidence curation replies with visible task figures
 3. Use harness overview tools for status and triage:
    - `qdash_dashboard`
+   - `qdash_dashboard_insights`
    - `qdash_recent_calibration_summary`
    - `qdash_recommend_next_action`
    - `qdash_triage_overview`
@@ -75,6 +77,17 @@ The extension uses `@oqtopus-team/qdash-client` and supports:
 - explicit `profile` / `configPath` parameters
 
 If `QDASH_BASE_URL` is set and no profile is specified, the tools default to environment variables. Otherwise they use profile `default`.
+
+## Evidence curation workflow
+
+When the user wants to preserve an investigated observation in QDash forum/notes:
+
+1. Inspect the task result, task figure, timeseries/history, and related forum context first.
+2. Summarize the observation as evidence, not as an automatic calibration decision.
+3. Prefer replying to an existing target/coupling forum thread when one exists.
+4. Use `qdash_create_forum_evidence_reply` for task-result evidence so figures are embedded as QDash UI image blocks (`/api/executions/figure?path=...`) and visible in the forum.
+5. Include task and execution QDash Web URLs in the reply.
+6. Ask for confirmation before creating/updating the forum post.
 
 ## Safety
 
