@@ -421,6 +421,28 @@ function ansi(code: string, text: string): string {
   return `\u001b[${code}m${text}\u001b[0m`;
 }
 
+function stripAnsi(text: string): string {
+  return text.replace(/\u001b\[[0-9;]*m/g, "");
+}
+
+function padAnsi(text: string, width: number): string {
+  return text + " ".repeat(Math.max(0, width - stripAnsi(text).length));
+}
+
+function boxed(title: string, body: string[], color = false): string[] {
+  const plainTitle = ` ${title} `;
+  const width = Math.min(92, Math.max(36, ...body.map((line) => stripAnsi(line).length), plainTitle.length + 4));
+  const borderColor = (text: string) => color ? ansi("90", text) : text;
+  const titleText = color ? ansi("1;36", plainTitle) : plainTitle;
+  const top = borderColor("╭") + titleText + borderColor("─".repeat(Math.max(0, width - plainTitle.length))) + borderColor("╮");
+  const bottom = borderColor("╰" + "─".repeat(width) + "╯");
+  return [
+    top,
+    ...body.map((line) => `${borderColor("│")} ${padAnsi(line, width - 2)} ${borderColor("│")}`),
+    bottom,
+  ];
+}
+
 function dashboardLines(dashboard: Awaited<ReturnType<typeof buildDashboard>>, color = false): string[] {
   const chips = arrayFromPayload(dashboard.chips);
   const profile = dashboard.context.profile ?? "env/default";
@@ -433,10 +455,8 @@ function dashboardLines(dashboard: Awaited<ReturnType<typeof buildDashboard>>, c
   const error = (text: string) => color ? ansi("31", text) : text;
   const issueCount = dashboard.openIssues.count > 0 ? warning(String(dashboard.openIssues.count)) : success(String(dashboard.openIssues.count));
   const failedCount = dashboard.failedTaskResults.count > 0 ? error(`${dashboard.failedTaskResults.shown}/${dashboard.failedTaskResults.count}`) : success(`${dashboard.failedTaskResults.shown}/${dashboard.failedTaskResults.count}`);
-  return [
-    accent("QDash Harness"),
+  return boxed("QDash Harness", [
     `${muted("profile")} ${accent(profile)}   ${muted("chip")} ${accent(dashboard.context.chipId)}   ${muted("session")} ${dim(session)}`,
-    "",
     `${muted("chips")} ${success(String(chips.length))}   ${muted("open issues")} ${issueCount}   ${muted("executions")} ${accent(`${dashboard.recentExecutions.shown}/${dashboard.recentExecutions.count}`)}   ${muted("failed tasks")} ${failedCount}`,
     "",
     accent("Open issues"),
@@ -447,7 +467,7 @@ function dashboardLines(dashboard: Awaited<ReturnType<typeof buildDashboard>>, c
     "",
     accent("Failed task results"),
     ...(dashboard.failedTaskResults.items.length > 0 ? dashboard.failedTaskResults.items.map((item, index) => `  ${error(formatItem(item, `task-${index + 1}`))}`) : [`  ${dim("none")}`]),
-  ];
+  ], color);
 }
 
 function styledDashboardLines(dashboard: Awaited<ReturnType<typeof buildDashboard>>, theme: Theme): string[] {
@@ -1026,8 +1046,7 @@ export default function qdashExtension(pi: ExtensionAPI) {
       const dim = (text: string) => params.color ? ansi("2", text) : text;
       const success = (text: string) => params.color ? ansi("32", text) : text;
       const error = (text: string) => params.color ? ansi("31", text) : text;
-      const lines = [
-        accent("QDash Triage"),
+      const lines = boxed("QDash Triage", [
         `open issues ${triage.openIssues.count > 0 ? ansi("33", String(triage.openIssues.count)) : success(String(triage.openIssues.count))}`,
         `failed tasks ${triage.failedTaskResults.count > 0 ? error(`${triage.failedTaskResults.shown}/${triage.failedTaskResults.count}`) : success(`${triage.failedTaskResults.shown}/${triage.failedTaskResults.count}`)}`,
         "",
@@ -1036,7 +1055,7 @@ export default function qdashExtension(pi: ExtensionAPI) {
         "",
         accent("Failed task results"),
         ...(dashboard.failedTaskResults.items.length > 0 ? dashboard.failedTaskResults.items.map((item, index) => `  ${params.color ? error(formatItem(item, `task-${index + 1}`)) : formatItem(item, `task-${index + 1}`)}`) : [`  ${dim("none")}`]),
-      ];
+      ], params.color);
       return toTextToolResult(lines.join("\n"), triage, { tool: "qdash_triage_overview" });
     },
     renderResult(result, _options, theme) {

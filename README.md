@@ -86,7 +86,7 @@ This package also provides `/skill:qdash`, which guides pi to choose the right Q
 
 These commands manage session-local QDash context, update the pi status/widget, show or refresh a themed compact QDash dashboard, and show non-secret QDash configuration details. Tools use the current profile/chip context when their parameters are omitted.
 
-`qdash_dashboard` and `qdash_triage_overview` provide compact text output for non-interactive runs and custom TUI renderers for nicer interactive tool results. Pass `color: true` to emit ANSI-colored text output in terminal-oriented non-interactive usage.
+`qdash_dashboard` and `qdash_triage_overview` provide boxed compact text output for non-interactive runs and custom TUI renderers for nicer interactive tool results. Pass `color: true` to emit ANSI-colored text output in terminal-oriented non-interactive usage.
 
 ## Development
 
