@@ -493,7 +493,7 @@ function arrayFromPayload(payload: unknown): unknown[] {
   if (Array.isArray(payload)) return payload;
   if (payload && typeof payload === "object") {
     const object = payload as Record<string, unknown>;
-    for (const key of ["items", "results", "data", "issues", "executions", "chips", "tasks"]) {
+    for (const key of ["items", "results", "data", "issues", "executions", "chips", "tasks", "insights"]) {
       if (Array.isArray(object[key])) return object[key];
     }
   }
@@ -796,6 +796,17 @@ function recentCalibrationSummaryComponent(summary: RecentCalibrationSummary, th
   };
 }
 
+type TargetOperationsReport = {
+  context: { profile?: string; chipId: string; webBaseUrl: string };
+  target: { kind: "qubit" | "coupling"; id: string; label: string };
+  latestTarget: unknown;
+  recentResults: Record<string, unknown>[];
+  failures: Record<string, unknown>[];
+  issues: Record<string, unknown>[];
+  forumPosts: Record<string, unknown>[];
+  recommendation: RecommendedNextAction | null;
+};
+
 type RecommendedNextAction = {
   target: string;
   recommendation: string;
@@ -827,6 +838,261 @@ function recommendFromCalibrationSummary(summary: RecentCalibrationSummary, requ
     }
     return { target: group.target, status: "ok", recommendation: "No immediate recovery action suggested.", reason: group.summary, links: group.links, latest: group.latest };
   });
+}
+
+async function buildTargetOperationsReport(params: { profile?: string; configPath?: string; useEnv?: boolean; chipId?: string; qid?: string; couplingId?: string; limit?: number; withinHours?: number }): Promise<TargetOperationsReport> {
+  params = applyQDashContext(params);
+  const client = await makeClient(params);
+  const chipId = await defaultChipId(client, params.chipId);
+  const qid = params.qid ?? (params.couplingId ? undefined : currentContext.qid);
+  const couplingId = params.couplingId ?? (params.qid ? undefined : currentContext.couplingId);
+  if (!qid && !couplingId) throw new Error("qid or couplingId is required (or select one with /qdash-use-target)");
+  const kind = qid ? "qubit" : "coupling";
+  const id = qid ?? couplingId as string;
+  const label = kind === "qubit" ? `q${id}` : `c${id}`;
+  const end = new Date();
+  const start = new Date(end.getTime() - (params.withinHours ?? 168) * 3600_000);
+  const limit = Math.max(1, Math.min(100, params.limit ?? 10));
+  const [latestTarget, results, issues, forumPosts] = await Promise.all([
+    kind === "qubit" ? client.getChipQubit(chipId, id) : client.getChipCoupling(chipId, id),
+    client.listTaskResults({ chipId, qid, couplingId, startAt: start.toISOString(), endAt: end.toISOString(), limit }),
+    rawGet(client, "/issues", { is_closed: false, limit: 100 }),
+    client.listForumPosts({ chipId, status: "open", targetType: kind, targetId: id, limit }),
+  ]);
+  const recentResults = arrayFromPayload(results).filter((item): item is Record<string, unknown> => Boolean(item) && typeof item === "object");
+  const taskIds = new Set(recentResults.map((item) => firstString(item, ["task_id", "taskId"])).filter((item): item is string => Boolean(item)));
+  const targetIssues = arrayFromPayload(issues).filter((item): item is Record<string, unknown> => {
+    if (!item || typeof item !== "object") return false;
+    const issue = item as Record<string, unknown>;
+    return (firstString(issue, ["task_id", "taskId"]) && taskIds.has(firstString(issue, ["task_id", "taskId"])!)) || targetFromText(firstString(issue, ["title", "summary"]) ?? "") === label;
+  });
+  const summary: RecentCalibrationSummary = { context: { profile: params.profile ?? currentContext.profile, chipId, webBaseUrl: qdashWebBaseUrl(client) }, items: recentResults, groups: [] };
+  const groups = new Map<string, Record<string, unknown>[]>();
+  groups.set(label, recentResults);
+  summary.groups = [...groups.entries()].map(([target, items]) => ({ target, ...calibrationSummaryForTarget(items), links: qdashObjectLinks(client, items[0] ?? {}) }));
+  const recommendation = recommendFromCalibrationSummary(summary, label)[0] ?? null;
+  return {
+    context: summary.context,
+    target: { kind, id, label },
+    latestTarget,
+    recentResults,
+    failures: recentResults.filter((item) => firstString(item, ["status"])?.toLowerCase() === "failed"),
+    issues: targetIssues,
+    forumPosts: forumPostsFromPayload(forumPosts),
+    recommendation,
+  };
+}
+
+function targetOperationsReportLines(report: TargetOperationsReport, color = false): string[] {
+  const accent = (text: string) => color ? ansi("1;36", text) : text;
+  const muted = (text: string) => color ? ansi("90", text) : text;
+  const warn = (text: string) => color ? ansi("33", text) : text;
+  const error = (text: string) => color ? ansi("31", text) : text;
+  const resultLine = (item: Record<string, unknown>) => {
+    const task = firstString(item, ["task_name", "name"]) ?? "task";
+    const status = firstString(item, ["status"]) ?? "unknown";
+    const id = firstString(item, ["task_id", "taskId"]) ?? "";
+    return `${statusIcon(status)} ${task} [${status}]${id ? ` ${shortId(id, 16)}` : ""}`;
+  };
+  return boxed(`QDash Target Report ${report.target.label}`, [
+    `${muted("profile")} ${accent(report.context.profile ?? "env/default")}  ${muted("chip")} ${accent(report.context.chipId)}`,
+    `${muted("results")} ${report.recentResults.length}  ${muted("failures")} ${report.failures.length ? error(String(report.failures.length)) : "0"}  ${muted("issues")} ${report.issues.length ? warn(String(report.issues.length)) : "0"}  ${muted("forum")} ${report.forumPosts.length}`,
+    "",
+    accent("Recent results"),
+    ...(report.recentResults.length ? report.recentResults.slice(0, 10).map(resultLine) : [`  ${muted("none")}`]),
+    "",
+    accent("Recommendation"),
+    ...(report.recommendation ? [`  ${report.recommendation.recommendation}`, `  ${muted("reason")} ${report.recommendation.reason}`] : [`  ${muted("no immediate action suggested")}`]),
+  ], color);
+}
+
+type CalibrationPlanStep = {
+  order: number;
+  action: string;
+  mode: "inspect" | "diagnostic" | "validate" | "stop";
+  requiresConfirmation: boolean;
+  reason: string;
+};
+
+type CalibrationPlan = {
+  context: TargetOperationsReport["context"];
+  target: TargetOperationsReport["target"];
+  basis: string;
+  steps: CalibrationPlanStep[];
+  safety: string[];
+};
+
+function buildCalibrationPlan(report: TargetOperationsReport): CalibrationPlan {
+  const latest = report.recentResults[0] ?? {};
+  const task = firstString(latest, ["task_name", "name"]) ?? "";
+  const message = firstString(latest, ["message"]) ?? "";
+  const failed = report.failures.length > 0;
+  const steps: CalibrationPlanStep[] = [{ order: 1, action: `Inspect ${report.target.label} report, figures, history, and forum context`, mode: "inspect", requiresConfirmation: false, reason: "Establish evidence before any operational action." }];
+
+  if (report.target.kind === "qubit" && task === "CheckRabi" && failed && /non-finite|nan|r²|r2/i.test(message)) {
+    steps.push(
+      { order: 2, action: "CheckChevron", mode: "diagnostic", requiresConfirmation: true, reason: "Recover a non-finite Rabi fit using a same-target diagnostic." },
+      { order: 3, action: "Configure", mode: "validate", requiresConfirmation: true, reason: "Only if CheckChevron succeeds with plausible estimates." },
+      { order: 4, action: "CheckRabi", mode: "validate", requiresConfirmation: true, reason: "Validate the Chevron-derived operating point without committing candidates." },
+    );
+  } else if (report.target.kind === "coupling" && failed && /randomized|bell|zx90|cross.?resonance/i.test(`${task} ${message}`)) {
+    for (const [index, action] of ["CheckCrossResonance", "CreateZX90", "CheckZX90", "CheckBellState", "CheckBellStateTomography", "ZX90InterleavedRandomizedBenchmarking"].entries()) {
+      steps.push({ order: index + 2, action, mode: index === 0 ? "diagnostic" : "validate", requiresConfirmation: true, reason: "Walk back through two-qubit prerequisites before RB validation." });
+    }
+  } else if (report.recommendation?.status === "stop" || report.recommendation?.status === "human") {
+    steps.push({ order: 2, action: "Request human review", mode: "stop", requiresConfirmation: false, reason: report.recommendation.reason });
+  } else {
+    steps.push({ order: 2, action: "Run the task recommended by the target report", mode: "validate", requiresConfirmation: true, reason: report.recommendation?.reason ?? "No automatic recovery recipe matched; review the evidence first." });
+  }
+
+  return {
+    context: report.context,
+    target: report.target,
+    basis: failed ? `Latest failure: ${task || "unknown task"}${message ? ` — ${message}` : ""}` : "No recent failed result matched a recovery recipe.",
+    steps,
+    safety: [
+      "This is a dry-run plan; no task is executed and no parameter is changed.",
+      "Confirm each operational step separately.",
+      "Do not commit or apply candidates until a validation task succeeds and the user explicitly approves it.",
+    ],
+  };
+}
+
+function calibrationPlanLines(plan: CalibrationPlan, color = false): string[] {
+  const accent = (text: string) => color ? ansi("1;36", text) : text;
+  const muted = (text: string) => color ? ansi("90", text) : text;
+  const mark = (mode: CalibrationPlanStep["mode"]) => mode === "stop" ? "✗" : mode === "inspect" ? "·" : mode === "diagnostic" ? "→" : "✓";
+  return boxed(`QDash Dry-run Plan ${plan.target.label}`, [
+    `${muted("profile")} ${accent(plan.context.profile ?? "env/default")}  ${muted("chip")} ${accent(plan.context.chipId)}`,
+    `${muted("basis")} ${plan.basis}`,
+    "",
+    ...plan.steps.map((step) => `${mark(step.mode)} ${step.order}. ${step.action} [${step.mode}]${step.requiresConfirmation ? " [confirmation]" : ""}\n    ${muted(step.reason)}`),
+    "",
+    accent("Safety gates"),
+    ...plan.safety.map((item) => `  - ${item}`),
+  ], color);
+}
+
+type DegradationReport = {
+  context: { profile?: string; chipId: string; webBaseUrl: string };
+  lock: unknown;
+  changes: unknown;
+  trends: unknown;
+  recommendations?: unknown;
+};
+
+async function buildDegradationReport(params: { profile?: string; configPath?: string; useEnv?: boolean; chipId?: string; withinHours?: number; minStreak?: number; limit?: number; entityId?: string }): Promise<DegradationReport> {
+  params = applyQDashContext(params);
+  const client = await makeClient(params);
+  const chipId = await defaultChipId(client, params.chipId);
+  const [lock, changes, trends, recommendations] = await Promise.all([
+    client.getExecutionLockStatus(),
+    client.getRecentChanges({ withinHours: params.withinHours ?? 24, limit: params.limit ?? 20 }),
+    client.getDegradationTrends({ minStreak: params.minStreak ?? 3, limit: params.limit ?? 20 }),
+    params.entityId ? client.getRecalibrationRecommendations(params.entityId) : Promise.resolve(undefined),
+  ]);
+  return { context: { profile: params.profile ?? currentContext.profile, chipId, webBaseUrl: qdashWebBaseUrl(client) }, lock, changes, trends, recommendations };
+}
+
+function degradationReportLines(report: DegradationReport, color = false): string[] {
+  const accent = (text: string) => color ? ansi("1;36", text) : text;
+  const muted = (text: string) => color ? ansi("90", text) : text;
+  const objectArray = (value: unknown, keys: string[]): Record<string, unknown>[] => {
+    const payload = value && typeof value === "object" ? value as Record<string, unknown> : {};
+    for (const key of keys) if (Array.isArray(payload[key])) return payload[key].filter((item): item is Record<string, unknown> => Boolean(item) && typeof item === "object");
+    return [];
+  };
+  const changes = objectArray(report.changes, ["changes", "items"]);
+  const trends = objectArray(report.trends, ["trends", "items"]);
+  const recommendations = objectArray(report.recommendations, ["recommended_tasks", "tasks"]);
+  const locked = Boolean(report.lock && typeof report.lock === "object" && (report.lock as Record<string, unknown>).lock);
+  return boxed("QDash Degradation Report", [
+    `${muted("profile")} ${accent(report.context.profile ?? "env/default")}  ${muted("chip")} ${accent(report.context.chipId)}  ${muted("execution lock")} ${locked ? "LOCKED" : "available"}`,
+    `${muted("recent changes")} ${changes.length}  ${muted("degradation trends")} ${trends.length}${report.recommendations ? `  ${muted("recommendations")} ${recommendations.length}` : ""}`,
+    "",
+    accent("Degradation trends"),
+    ...(trends.length ? trends.slice(0, 10).map((item) => `! ${firstString(item, ["parameter_name", "parameter", "name"]) ?? "parameter"} ${firstString(item, ["qid", "target"]) ?? ""} ${firstString(item, ["streak", "severity"]) ?? ""}`) : [`  ${muted("none detected")}`]),
+    "",
+    accent("Recent changes"),
+    ...(changes.length ? changes.slice(0, 10).map((item) => `• ${firstString(item, ["parameter_name", "parameter", "name"]) ?? "parameter"} ${firstString(item, ["qid", "target"]) ?? ""} Δ${firstString(item, ["delta", "delta_percent"]) ?? "?"}`) : [`  ${muted("none")}`]),
+    ...(report.recommendations ? ["", accent("Recommended downstream tasks"), ...(recommendations.length ? recommendations.slice(0, 8).map((item) => `→ ${firstString(item, ["task_name", "task", "name"]) ?? JSON.stringify(item)}`) : [`  ${muted("none")}`])] : []),
+    "",
+    `${accent("safety")} ${locked ? "An execution is active; do not start another calibration action." : "No active execution lock reported. This report is read-only."}`,
+  ], color);
+}
+
+type CalibrationValidation = {
+  context: { profile?: string; chipId?: string; webBaseUrl: string };
+  taskId: string;
+  task: Record<string, unknown>;
+  status: "passed" | "failed" | "needs_review" | "unknown";
+  gates: Array<{ name: string; passed: boolean; detail: string }>;
+  figurePaths: string[];
+  issues: Record<string, unknown>[];
+  comparison?: unknown;
+  next: string;
+  links: Record<string, string>;
+};
+
+async function buildCalibrationValidation(params: { profile?: string; configPath?: string; useEnv?: boolean; taskId: string; beforeExecutionId?: string }): Promise<CalibrationValidation> {
+  params = applyQDashContext(params);
+  const client = await makeClient(params);
+  const task = await client.getTaskResult(params.taskId) as unknown as Record<string, unknown>;
+  const status = firstString(task, ["status"])?.toLowerCase() ?? "unknown";
+  const figurePaths = taskFigurePaths(task, 20);
+  const issuesPayload = await rawGet(client, `/task-results/${pathPart(params.taskId)}/issues`).catch(() => []);
+  const issues = arrayFromPayload(issuesPayload).filter((item): item is Record<string, unknown> => Boolean(item) && typeof item === "object");
+  const afterExecutionId = firstString(task, ["execution_id", "executionId"]);
+  const comparison = params.beforeExecutionId && afterExecutionId
+    ? await client.compareExecutions(params.beforeExecutionId, afterExecutionId).catch(() => undefined)
+    : undefined;
+  const comparisonRecord = comparison as unknown as Record<string, unknown> | undefined;
+  const changedParameters = comparisonRecord ? firstNumber(comparisonRecord, ["changed_count"]) ?? (Array.isArray(comparisonRecord.changed_parameters) ? (comparisonRecord.changed_parameters as unknown[]).length : undefined) : undefined;
+  const gates = [
+    { name: "task completed", passed: ["completed", "success", "succeeded"].includes(status), detail: status },
+    { name: "no task issues", passed: issues.length === 0, detail: issues.length ? `${issues.length} issue(s) require review` : "none" },
+    { name: "figures available", passed: figurePaths.length > 0, detail: figurePaths.length ? `${figurePaths.length} figure(s)` : "no figures attached" },
+    ...(params.beforeExecutionId ? [{ name: "execution comparison", passed: comparison !== undefined, detail: comparison === undefined ? "comparison unavailable" : `${changedParameters ?? 0} changed parameter(s)` }] : []),
+  ];
+  const passed = gates[0].passed && gates[1].passed;
+  const comparisonGate = gates.find((gate) => gate.name === "execution comparison");
+  const validationStatus: CalibrationValidation["status"] = !gates[0].passed ? "failed" : issues.length > 0 || !gates[2].passed || comparisonGate?.passed === false ? "needs_review" : "passed";
+  const next = validationStatus === "passed"
+    ? "Inspect candidates and ask for explicit confirmation before commit/apply. Preserve evidence in the target Forum thread when appropriate."
+    : validationStatus === "failed"
+      ? "Stop the recovery sequence; inspect the task message and figures before another operational action."
+      : "Review the listed issues/figures before treating this result as authoritative.";
+  return {
+    context: { profile: params.profile ?? currentContext.profile, chipId: firstString(task, ["chip_id", "chipId"]) ?? currentContext.chipId, webBaseUrl: qdashWebBaseUrl(client) },
+    taskId: params.taskId,
+    task,
+    status: validationStatus,
+    gates,
+    figurePaths,
+    issues,
+    comparison,
+    next,
+    links: qdashObjectLinks(client, task),
+  };
+}
+
+function calibrationValidationLines(validation: CalibrationValidation, color = false): string[] {
+  const accent = (text: string) => color ? ansi("1;36", text) : text;
+  const muted = (text: string) => color ? ansi("90", text) : text;
+  const statusColor = validation.status === "passed" ? "32" : validation.status === "failed" ? "31" : "33";
+  const statusText = color ? ansi(statusColor, validation.status) : validation.status;
+  return boxed(`QDash Calibration Validation ${shortId(validation.taskId, 16)}`, [
+    `${muted("status")} ${statusText}`,
+    `${muted("task")} ${firstString(validation.task, ["task_name", "name"]) ?? "unknown"}`,
+    "",
+    accent("Gates"),
+    ...validation.gates.map((gate) => `${gate.passed ? "✓" : "✗"} ${gate.name}: ${gate.detail}`),
+    "",
+    `${accent("next")} ${validation.next}`,
+    ...(validation.figurePaths.length ? ["", `${muted("figures")} ${validation.figurePaths.length} (use qdash_get_task_figures)`] : []),
+    ...(validation.comparison ? [`${muted("comparison")} ${firstNumber(validation.comparison as Record<string, unknown>, ["unchanged_count"]) ?? 0} unchanged parameter(s)`] : []),
+    ...(validation.links.task_result ? [`${muted("task url")} ${validation.links.task_result}`] : []),
+  ], color);
 }
 
 function recommendationLines(recommendations: RecommendedNextAction[], color = false): string[] {
@@ -905,11 +1171,12 @@ async function buildDashboardInsights(params: { profile?: string; configPath?: s
   const limit = params.limit ?? 30;
   const end = new Date();
   const start = new Date(end.getTime() - (params.withinHours ?? 168) * 3600_000);
-  const [forums, issues, failed, metrics] = await Promise.allSettled([
+  const [forums, issues, failed, metrics, aiInsights] = await Promise.allSettled([
     client.listForumPosts({ chipId, status: "open", limit }),
     rawGet(client, "/issues", { is_closed: false, limit }),
     rawGet(client, "/task-results", { chip_id: chipId, status: "failed", start_from: start.toISOString(), start_to: end.toISOString(), limit }),
     client.getChipMetrics(chipId),
+    rawGet(client, `/chips/${pathPart(chipId)}/ai-insights`, { latest_only: true, start_at: start.toISOString(), end_at: end.toISOString() }),
   ]);
   const value = <T>(result: PromiseSettledResult<T>): T | undefined => result.status === "fulfilled" ? result.value : undefined;
   const insightMap = new Map<string, DashboardInsight>();
@@ -940,6 +1207,20 @@ async function buildDashboardInsights(params: { profile?: string; configPath?: s
   }
 
   addMetricInsights(insightMap, value(metrics), client);
+
+  const aiPayload = value(aiInsights);
+  for (const item of arrayFromPayload(aiPayload).filter((entry): entry is Record<string, unknown> => Boolean(entry) && typeof entry === "object")) {
+    const title = firstString(item, ["title", "summary"]) ?? "QDash AI insight";
+    const severityValue = firstString(item, ["severity"])?.toLowerCase();
+    const severity: DashboardInsight["severity"] = severityValue === "critical" ? "critical" : severityValue === "warning" ? "warning" : "info";
+    const targets = Array.isArray(item.affected_targets) ? item.affected_targets.filter((target): target is string => typeof target === "string") : [];
+    for (const rawTarget of targets) {
+      const target = rawTarget.match(/^Q/i) ? `q${rawTarget.replace(/^Q0*/i, "")}` : rawTarget.match(/^C/i) ? `c${rawTarget.slice(1)}` : targetFromText(rawTarget);
+      if (!target) continue;
+      const evidence = firstString(item, ["recommended_action", "primary_reason"]) ?? `QDash AI insight: ${title}`;
+      addEvidence(insightMap, target, severity, title, evidence, firstString(item, ["recommended_action"]) ?? "Review the QDash AI insight and supporting task evidence.");
+    }
+  }
 
   const insights = [...insightMap.values()].sort((a, b) => {
     const rank = { critical: 2, warning: 1, info: 0 } as const;
@@ -1711,6 +1992,63 @@ export default function qdashExtension(pi: ExtensionAPI) {
     parameters: Type.Object({ ...connectionParams, chipId: Type.Optional(Type.String()), flowName: Type.Optional(Type.String()), status: Type.Optional(Type.String()), limit: Type.Optional(Type.Number()), skip: Type.Optional(Type.Number()) }),
   });
 
+  pi.registerTool({
+    name: "qdash_wait_execution",
+    label: "QDash Wait Execution",
+    description: "Poll a QDash execution until it reaches a terminal state. This is read-only and does not start, cancel, or modify execution.",
+    promptSnippet: "Wait for a QDash calibration execution to finish and inspect its final state",
+    promptGuidelines: [
+      "Use qdash_wait_execution after a confirmed calibration action when the user wants completion polling.",
+      "After completion, use qdash_validate_calibration before committing or applying any candidates.",
+    ],
+    parameters: Type.Object({
+      ...connectionParams,
+      executionId: Type.String(),
+      timeoutSeconds: Type.Optional(Type.Number()),
+      pollIntervalSeconds: Type.Optional(Type.Number()),
+    }),
+    async execute(_toolCallId, params: { profile?: string; configPath?: string; useEnv?: boolean; executionId: string; timeoutSeconds?: number; pollIntervalSeconds?: number }) {
+      const client = await makeClient(params);
+      const data = await client.waitForExecution(params.executionId, { timeoutSeconds: params.timeoutSeconds, pollIntervalSeconds: params.pollIntervalSeconds });
+      return toToolResult(withQDashLinks(client, data), { tool: "qdash_wait_execution", executionId: params.executionId, webBaseUrl: qdashWebBaseUrl(client) });
+    },
+  });
+
+  pi.registerTool({
+    name: "qdash_compare_executions",
+    label: "QDash Compare Executions",
+    description: "Compare calibration parameter values between two QDash executions. Read-only.",
+    promptSnippet: "Compare QDash calibration parameters before and after an execution",
+    promptGuidelines: [
+      "Use qdash_compare_executions when validating the effect of a calibration execution.",
+      "A parameter difference is evidence only; require explicit review before commit or apply.",
+    ],
+    parameters: Type.Object({
+      ...connectionParams,
+      executionIdBefore: Type.String(),
+      executionIdAfter: Type.String(),
+      color: Type.Optional(Type.Boolean({ description: "Emit ANSI colors in text output for terminal display." })),
+    }),
+    async execute(_toolCallId, params: { profile?: string; configPath?: string; useEnv?: boolean; executionIdBefore: string; executionIdAfter: string; color?: boolean }) {
+      const client = await makeClient(params);
+      const data = await client.compareExecutions(params.executionIdBefore, params.executionIdAfter);
+      const record = data as unknown as Record<string, unknown>;
+      const changed = Array.isArray(record.changed_parameters) ? record.changed_parameters.length : 0;
+      const added = Array.isArray(record.added_parameters) ? record.added_parameters.length : 0;
+      const removed = Array.isArray(record.removed_parameters) ? record.removed_parameters.length : 0;
+      const text = boxed("QDash Execution Comparison", [
+        `before ${params.executionIdBefore}`,
+        `after  ${params.executionIdAfter}`,
+        "",
+        `changed ${changed}  added ${added}  removed ${removed}`,
+        `unchanged ${firstNumber(record, ["unchanged_count"]) ?? 0}`,
+        "",
+        "Read-only comparison. Review changed parameters and validation figures before committing or applying candidates.",
+      ], params.color).join("\\n");
+      return toTextToolResult(text, data, { tool: "qdash_compare_executions", webBaseUrl: qdashWebBaseUrl(client) });
+    },
+  });
+
   registerQueryTool({
     name: "qdash_get_execution",
     label: "QDash Get Execution",
@@ -2069,6 +2407,33 @@ export default function qdashExtension(pi: ExtensionAPI) {
   });
 
   pi.registerTool({
+    name: "qdash_preview_forum_evidence_reply",
+    label: "QDash Preview Forum Evidence Reply",
+    description: "Preview a QDash forum evidence reply generated from a task result. Read-only; no forum post is created.",
+    promptSnippet: "Prepare and review QDash evidence reply content before publishing it",
+    promptGuidelines: [
+      "Use qdash_preview_forum_evidence_reply before publishing investigated calibration evidence.",
+      "After the user approves the preview, use qdash_create_forum_evidence_reply to write it.",
+    ],
+    parameters: Type.Object({
+      ...connectionParams,
+      parentPostId: Type.String(),
+      taskId: Type.String(),
+      interpretation: Type.String({ description: "Human-readable interpretation or hypothesis to append after the task links and figures." }),
+      title: Type.Optional(Type.String()),
+      includeFigures: Type.Optional(Type.Boolean()),
+      maxFigures: Type.Optional(Type.Number()),
+      includeHistory: Type.Optional(Type.Boolean()),
+      historyLimit: Type.Optional(Type.Number()),
+    }),
+    async execute(_toolCallId, params: { profile?: string; configPath?: string; useEnv?: boolean; parentPostId: string; taskId: string; interpretation: string; title?: string; includeFigures?: boolean; maxFigures?: number; includeHistory?: boolean; historyLimit?: number }) {
+      const client = await makeClient(params);
+      const built = await buildForumEvidenceReply(client, params);
+      return toTextToolResult(built.preview, { preview: built.preview, parent: built.parent, task: built.task, figures: built.figures }, { tool: "qdash_preview_forum_evidence_reply" });
+    },
+  });
+
+  pi.registerTool({
     name: "qdash_create_forum_evidence_reply",
     label: "QDash Create Forum Evidence Reply",
     description: "Create a QDash forum reply from a task result, embedding task figures as visible QDash UI image blocks. This is a write operation and requires confirmation.",
@@ -2279,6 +2644,116 @@ export default function qdashExtension(pi: ExtensionAPI) {
     promptSnippet: "Get QDash provenance stats",
     action: "provenance_stats",
     parameters: Type.Object(connectionParams),
+  });
+
+  pi.registerTool({
+    name: "qdash_degradation_report",
+    label: "QDash Degradation Report",
+    description: "Show read-only provenance degradation trends, recent parameter changes, execution lock state, and optional downstream recalibration recommendations.",
+    promptSnippet: "Inspect QDash degradation trends and recalibration impact before changing parameters",
+    promptGuidelines: [
+      "Use qdash_degradation_report before planning calibration changes or when investigating drift.",
+      "The execution lock is a safety signal, not permission to bypass confirmation or start work.",
+    ],
+    parameters: Type.Object({
+      ...connectionParams,
+      chipId: Type.Optional(Type.String()),
+      withinHours: Type.Optional(Type.Number()),
+      minStreak: Type.Optional(Type.Number()),
+      limit: Type.Optional(Type.Number()),
+      entityId: Type.Optional(Type.String({ description: "Optional provenance entity ID for downstream recalibration recommendations." })),
+      color: Type.Optional(Type.Boolean({ description: "Emit ANSI colors in text output for terminal display." })),
+    }),
+    async execute(_toolCallId, params: { profile?: string; configPath?: string; useEnv?: boolean; chipId?: string; withinHours?: number; minStreak?: number; limit?: number; entityId?: string; color?: boolean }) {
+      const report = await buildDegradationReport(params);
+      return toTextToolResult(degradationReportLines(report, params.color).join("\\n"), report, { tool: "qdash_degradation_report", webBaseUrl: report.context.webBaseUrl });
+    },
+    renderResult(result, _options, theme) {
+      const report = (result.details as { data?: DegradationReport } | undefined)?.data;
+      return report ? textComponent(degradationReportLines(report).join("\\n").split("\\n"), theme) : textComponent(["No degradation report"], theme);
+    },
+  });
+
+  pi.registerTool({
+    name: "qdash_validate_calibration",
+    label: "QDash Validate Calibration",
+    description: "Validate a calibration task result with explicit gates for status, issues, and figures. Read-only; does not commit or apply candidates.",
+    promptSnippet: "Validate a QDash calibration result before continuing or committing parameters",
+    promptGuidelines: [
+      "Use qdash_validate_calibration after an operational task completes or fails.",
+      "A passed validation is not approval to commit or apply parameters; require explicit confirmation for those writes.",
+    ],
+    parameters: Type.Object({
+      ...connectionParams,
+      taskId: Type.String(),
+      beforeExecutionId: Type.Optional(Type.String({ description: "Optional earlier execution ID to compare against the task's execution." })),
+      color: Type.Optional(Type.Boolean({ description: "Emit ANSI colors in text output for terminal display." })),
+    }),
+    async execute(_toolCallId, params: { profile?: string; configPath?: string; useEnv?: boolean; taskId: string; beforeExecutionId?: string; color?: boolean }) {
+      const validation = await buildCalibrationValidation(params);
+      return toTextToolResult(calibrationValidationLines(validation, params.color).join("\\n"), validation, { tool: "qdash_validate_calibration", webBaseUrl: validation.context.webBaseUrl });
+    },
+    renderResult(result, _options, theme) {
+      const validation = (result.details as { data?: CalibrationValidation } | undefined)?.data;
+      return validation ? textComponent(calibrationValidationLines(validation).join("\\n").split("\\n"), theme) : textComponent(["No calibration validation"], theme);
+    },
+  });
+
+  pi.registerTool({
+    name: "qdash_plan_calibration",
+    label: "QDash Plan Calibration",
+    description: "Create a read-only dry-run calibration plan for one qubit or coupling. It never executes tasks or changes parameters.",
+    promptSnippet: "Plan a safe QDash calibration workflow without executing it",
+    promptGuidelines: [
+      "Use qdash_plan_calibration after inspecting a target and before any operational calibration action.",
+      "Present the plan and require explicit confirmation for each write or task-execution step.",
+    ],
+    parameters: Type.Object({
+      ...connectionParams,
+      chipId: Type.Optional(Type.String()),
+      qid: Type.Optional(Type.String()),
+      couplingId: Type.Optional(Type.String()),
+      limit: Type.Optional(Type.Number()),
+      withinHours: Type.Optional(Type.Number()),
+      color: Type.Optional(Type.Boolean({ description: "Emit ANSI colors in text output for terminal display." })),
+    }),
+    async execute(_toolCallId, params: { profile?: string; configPath?: string; useEnv?: boolean; chipId?: string; qid?: string; couplingId?: string; limit?: number; withinHours?: number; color?: boolean }) {
+      const report = await buildTargetOperationsReport(params);
+      const plan = buildCalibrationPlan(report);
+      return toTextToolResult(calibrationPlanLines(plan, params.color).join("\\n"), plan, { tool: "qdash_plan_calibration" });
+    },
+    renderResult(result, _options, theme) {
+      const plan = (result.details as { data?: CalibrationPlan } | undefined)?.data;
+      return plan ? textComponent(calibrationPlanLines(plan).join("\\n").split("\\n"), theme) : textComponent(["No calibration plan"], theme);
+    },
+  });
+
+  pi.registerTool({
+    name: "qdash_target_report",
+    label: "QDash Target Report",
+    description: "Build a read-only operational report for one qubit or coupling, correlating recent results, failures, issues, forum context, and a safe next-action recommendation.",
+    promptSnippet: "Inspect one QDash qubit or coupling as an operational incident report",
+    promptGuidelines: [
+      "Use qdash_target_report before calibration changes when a specific qubit or coupling is under investigation.",
+      "This is read-only; do not treat the recommendation as approval to execute or commit a calibration action.",
+    ],
+    parameters: Type.Object({
+      ...connectionParams,
+      chipId: Type.Optional(Type.String()),
+      qid: Type.Optional(Type.String({ description: "Qubit ID. Defaults to the selected QDash target." })),
+      couplingId: Type.Optional(Type.String({ description: "Coupling ID. Defaults to the selected QDash target." })),
+      limit: Type.Optional(Type.Number()),
+      withinHours: Type.Optional(Type.Number({ description: "Lookback window. Defaults to 168 hours." })),
+      color: Type.Optional(Type.Boolean({ description: "Emit ANSI colors in text output for terminal display." })),
+    }),
+    async execute(_toolCallId, params: { profile?: string; configPath?: string; useEnv?: boolean; chipId?: string; qid?: string; couplingId?: string; limit?: number; withinHours?: number; color?: boolean }) {
+      const report = await buildTargetOperationsReport(params);
+      return toTextToolResult(targetOperationsReportLines(report, params.color).join("\\n"), report, { tool: "qdash_target_report", webBaseUrl: report.context.webBaseUrl });
+    },
+    renderResult(result, _options, theme) {
+      const report = (result.details as { data?: TargetOperationsReport } | undefined)?.data;
+      return report ? textComponent(targetOperationsReportLines(report).join("\\n").split("\\n"), theme) : textComponent(["No target report"], theme);
+    },
   });
 
   pi.registerTool({
@@ -2572,6 +3047,53 @@ export default function qdashExtension(pi: ExtensionAPI) {
       refreshContextUi(ctx);
       ctx.ui.setWidget("qdash", ["QDash context cleared", "profile env/default", "chip auto-chip", "session none"]);
       ctx.ui.notify("QDash context cleared", "info");
+    },
+  });
+
+  pi.registerCommand("qdash-degradation-report", {
+    description: "Show read-only QDash degradation trends and execution lock state",
+    handler: async (_args, ctx) => {
+      try {
+        const report = await buildDegradationReport({});
+        refreshContextUi(ctx);
+        ctx.ui.setWidget("qdash", (_tui, theme) => textComponent(degradationReportLines(report).slice(1, -1), theme, true));
+        ctx.ui.notify(`QDash degradation report updated: ${report.context.chipId}`, "info");
+      } catch (error) {
+        ctx.ui.notify(`QDash degradation report failed: ${error instanceof Error ? error.message : String(error)}`, "error");
+      }
+    },
+  });
+
+  pi.registerCommand("qdash-plan-calibration", {
+    description: "Show a read-only dry-run calibration plan for the selected target",
+    handler: async (_args, ctx) => {
+      try {
+        const report = await buildTargetOperationsReport({});
+        const plan = buildCalibrationPlan(report);
+        refreshContextUi(ctx);
+        ctx.ui.setWidget("qdash", (_tui, theme) => textComponent(calibrationPlanLines(plan).slice(1, -1), theme, true));
+        ctx.ui.notify(`QDash dry-run plan prepared: ${plan.target.label}`, "info");
+      } catch (error) {
+        ctx.ui.notify(`QDash plan failed: ${error instanceof Error ? error.message : String(error)}`, "error");
+      }
+    },
+  });
+
+  pi.registerCommand("qdash-target-report", {
+    description: "Show a read-only operational report; usage: /qdash-target-report qid <qid> | coupling <coupling_id>",
+    handler: async (args, ctx) => {
+      const [kind, value] = args.trim().split(/\\s+/).filter(Boolean);
+      const params = kind && value && ["qid", "q", "qubit", "coupling", "c"].includes(kind)
+        ? ["qid", "q", "qubit"].includes(kind) ? { qid: value } : { couplingId: value }
+        : {};
+      try {
+        const report = await buildTargetOperationsReport(params);
+        refreshContextUi(ctx);
+        ctx.ui.setWidget("qdash", (_tui, theme) => textComponent(targetOperationsReportLines(report).slice(1, -1), theme, true));
+        ctx.ui.notify(`QDash target report updated: ${report.target.label}`, "info");
+      } catch (error) {
+        ctx.ui.notify(`QDash target report failed: ${error instanceof Error ? error.message : String(error)}`, "error");
+      }
     },
   });
 

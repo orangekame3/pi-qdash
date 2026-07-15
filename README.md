@@ -50,7 +50,7 @@ pi install git:github.com/orangekame3/pi-qdash
   - `qdash_list_task_results`, `qdash_get_task_result`
   - `qdash_list_issues`
   - `qdash_list_flows`, `qdash_get_flow`
-  - `qdash_list_executions`, `qdash_get_execution`
+  - `qdash_list_executions`, `qdash_get_execution`, `qdash_wait_execution`, `qdash_compare_executions`
   - `qdash_list_ai_reviews`, `qdash_get_provenance_stats`
   - `qdash_list_forum_posts`, `qdash_get_forum_post`, `qdash_list_forum_replies`
   - `qdash_get_figure`, `qdash_get_task_figures`
@@ -60,6 +60,10 @@ pi install git:github.com/orangekame3/pi-qdash
   - `qdash_recent_calibration_summary`
   - `qdash_recommend_next_action`
   - `qdash_triage_overview`
+  - `qdash_target_report` (target-level read-only incident/operations report)
+  - `qdash_plan_calibration` (safe dry-run calibration plan; never executes)
+  - `qdash_validate_calibration` (post-task validation gates; read-only)
+  - `qdash_degradation_report` (provenance drift, changes, lock, and downstream recommendations)
 - Agent calibration workflow tools:
   - `qdash_create_agent_session`
   - `qdash_get_agent_session`
@@ -74,7 +78,7 @@ pi install git:github.com/orangekame3/pi-qdash
 
 Secrets such as `api_token`, passwords, and Cloudflare Access secrets are redacted from tool output. Write-oriented agent/forum workflow tools are approval-gated: interactive pi shows a confirmation prompt, and non-interactive runs require `confirmWrite: true`.
 
-Forum read tools render compact boxed summaries for list/detail/reply views. Figure tools fetch calibration PNG/JSON figures by path or task result through qdash-client helpers, and render images in interactive TUI. Forum write tools are available as confirmation-gated operations: `qdash_create_forum_post`, `qdash_update_forum_post`, and `qdash_create_forum_evidence_reply`. The evidence-reply helper builds a markdown reply from a task result, embeds figures so they are visible in the forum, links recent same-task history, and marks the reply with `— 🤖 by pi-qdash`.
+Forum read tools render compact boxed summaries for list/detail/reply views. Figure tools fetch calibration PNG/JSON figures by path or task result through qdash-client helpers, and render images in interactive TUI. Forum evidence can be previewed read-only with `qdash_preview_forum_evidence_reply`, then published through confirmation-gated `qdash_create_forum_evidence_reply`; other forum writes include `qdash_create_forum_post` and `qdash_update_forum_post`. The evidence-reply helper builds a markdown reply from a task result, embeds figures so they are visible in the forum, links recent same-task history, and marks the reply with `— 🤖 by pi-qdash`.
 
 ## Skill
 
@@ -89,6 +93,9 @@ This package also provides `/skill:qdash`, which guides pi to choose the right Q
 /qdash-use-agent-session <session_id>
 /qdash-context
 /qdash-dashboard [limit]
+/qdash-target-report qid <qid> | coupling <coupling_id>
+/qdash-plan-calibration
+/qdash-degradation-report
 /qdash-refresh [limit]
 /qdash-clear-context
 /qdash-config [profile]
@@ -98,7 +105,7 @@ For the common path, install the package and run `/qdash-setup mackerel 144Qv1` 
 
 These commands manage session-local QDash context, update the pi status/widget, show or refresh a themed compact QDash dashboard, and show non-secret QDash configuration details. Tools use the current profile/chip context when their parameters are omitted. In interactive mode, the highlighted footer status line shows the active QDash profile, chip, and agent session.
 
-`qdash_dashboard` and `qdash_triage_overview` provide boxed compact text output for non-interactive runs and custom TUI renderers for nicer interactive tool results. Pass `color: true` to emit ANSI-colored text output in terminal-oriented non-interactive usage.
+`qdash_dashboard` and `qdash_triage_overview` provide boxed compact text output for non-interactive runs and custom TUI renderers for nicer interactive tool results. `qdash_target_report` correlates one qubit/coupling's recent task results, failures, open issues, forum posts, and a conservative next-action recommendation; it is read-only and never executes calibration. `qdash_plan_calibration` turns that evidence into a confirmation-gated dry-run runbook with explicit safety gates. Pass `color: true` to emit ANSI-colored text output in terminal-oriented non-interactive usage.
 
 ## Development
 
