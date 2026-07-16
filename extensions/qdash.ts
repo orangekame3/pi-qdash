@@ -796,6 +796,101 @@ function recentCalibrationSummaryComponent(summary: RecentCalibrationSummary, th
   };
 }
 
+type CalibrationComparison = {
+  context: { profile?: string; chipId: string; webBaseUrl: string };
+  target: { kind: "qubit" | "coupling"; id: string; label: string };
+  compared: Array<{ task: string; before: Record<string, unknown>; after: Record<string, unknown>; changes: Record<string, { before: unknown; after: unknown }> }>;
+};
+
+async function buildCalibrationComparison(params: { profile?: string; configPath?: string; useEnv?: boolean; chipId?: string; qid?: string; couplingId?: string; limit?: number; withinHours?: number }): Promise<CalibrationComparison> {
+  params = applyQDashContext(params);
+  const client = await makeClient(params);
+  const chipId = await defaultChipId(client, params.chipId);
+  const qid = params.qid ?? (params.couplingId ? undefined : currentContext.qid);
+  const couplingId = params.couplingId ?? (params.qid ? undefined : currentContext.couplingId);
+  if (!qid && !couplingId) throw new Error("qid or couplingId is required (or select one with /qdash-use-target)");
+  const kind = qid ? "qubit" : "coupling";
+  const id = (qid ?? couplingId) as string;
+  const results = await client.listTaskResults({ chipId, qid, couplingId, limit: Math.max(2, Math.min(100, params.limit ?? 20)) });
+  const items = arrayFromPayload(results).filter((item): item is Record<string, unknown> => Boolean(item) && typeof item === "object");
+  const groups = new Map<string, Record<string, unknown>[]>();
+  for (const item of items) {
+    const task = firstString(item, ["task_name", "name"]) ?? "task";
+    groups.set(task, [...(groups.get(task) ?? []), item]);
+  }
+  const compared = [...groups.entries()].flatMap(([task, entries]) => {
+    if (entries.length < 2) return [];
+    const after = entries[0];
+    const before = entries[1];
+    const beforeParams = (before.output_parameters ?? {}) as Record<string, unknown>;
+    const afterParams = (after.output_parameters ?? {}) as Record<string, unknown>;
+    const changes: Record<string, { before: unknown; after: unknown }> = {};
+    for (const name of new Set([...Object.keys(beforeParams), ...Object.keys(afterParams)])) {
+      const beforeValue = parameterValue(beforeParams[name]);
+      const afterValue = parameterValue(afterParams[name]);
+      if (JSON.stringify(beforeValue) !== JSON.stringify(afterValue)) changes[name] = { before: beforeValue, after: afterValue };
+    }
+    return [{ task, before, after, changes }];
+  });
+  return { context: { profile: params.profile ?? currentContext.profile, chipId, webBaseUrl: qdashWebBaseUrl(client) }, target: { kind, id, label: kind === "qubit" ? `q${id}` : `c${id}` }, compared };
+}
+
+function parameterValue(value: unknown): unknown {
+  if (value && typeof value === "object" && "value" in value) return (value as { value?: unknown }).value;
+  return value;
+}
+
+function calibrationComparisonLines(comparison: CalibrationComparison, color = false): string[] {
+  const accent = (text: string) => color ? ansi("1;36", text) : text;
+  const muted = (text: string) => color ? ansi("90", text) : text;
+  const lines = [`profile ${comparison.context.profile ?? "env/default"}  chip ${comparison.context.chipId}`, `target ${comparison.target.label}`, ""];
+  if (comparison.compared.length === 0) lines.push(muted("Not enough repeated task results to compare."));
+  for (const item of comparison.compared) {
+    lines.push(accent(item.task));
+    const beforeId = firstString(item.before, ["task_id", "id"]) ?? "before";
+    const afterId = firstString(item.after, ["task_id", "id"]) ?? "after";
+    lines.push(`  before ${shortId(beforeId, 18)}  after ${shortId(afterId, 18)}`);
+    const changes = Object.entries(item.changes);
+    if (changes.length === 0) lines.push(`  ${muted("no output-parameter changes")}`);
+    else for (const [name, change] of changes) lines.push(`  ${name}: ${JSON.stringify(change.before)} → ${JSON.stringify(change.after)}`);
+  }
+  return boxed("QDash Calibration Comparison", lines, color);
+}
+
+type InvestigationReport = {
+  context: { profile?: string; chipId: string; webBaseUrl: string };
+  recent: RecentCalibrationSummary;
+  target?: TargetOperationsReport;
+  insights?: DashboardInsightsResult;
+};
+
+async function buildInvestigationReport(params: { profile?: string; configPath?: string; useEnv?: boolean; chipId?: string; qid?: string; couplingId?: string; limit?: number; withinHours?: number }): Promise<InvestigationReport> {
+  params = applyQDashContext(params);
+  const recent = await buildRecentCalibrationSummary(params);
+  const qid = params.qid ?? currentContext.qid;
+  const couplingId = params.couplingId ?? currentContext.couplingId;
+  if (qid || couplingId) {
+    const target = await buildTargetOperationsReport({ ...params, qid, couplingId });
+    return { context: recent.context, recent, target };
+  }
+  const insights = await buildDashboardInsights(params);
+  return { context: recent.context, recent, insights };
+}
+
+function investigationLines(report: InvestigationReport, color = false): string[] {
+  const sections = boxed("QDash Investigation", [
+    `profile ${report.context.profile ?? "env/default"}  chip ${report.context.chipId}`,
+    "",
+    "Recent calibration",
+    ...recentCalibrationSummaryLines(report.recent, color).slice(2, -1),
+    ...(report.target ? ["", ...targetOperationsReportLines(report.target, color).slice(2, -1)] : []),
+    ...(report.insights ? ["", ...dashboardInsightLines(report.insights, color).slice(2, -1)] : []),
+    "",
+    "read-only investigation; no task execution or parameter changes",
+  ], color);
+  return sections;
+}
+
 type TargetOperationsReport = {
   context: { profile?: string; chipId: string; webBaseUrl: string };
   target: { kind: "qubit" | "coupling"; id: string; label: string };
@@ -2574,6 +2669,42 @@ export default function qdashExtension(pi: ExtensionAPI) {
   });
 
   pi.registerTool({
+    name: "qdash_recent_calibration_figure",
+    label: "QDash Recent Calibration Figure",
+    description: "Fetch and render a figure from a recent calibration result without requiring a task ID.",
+    promptSnippet: "Show a recent QDash calibration experiment image",
+    promptGuidelines: ["Use qdash_recent_calibration_figure when the user asks to see recent calibration images and has not provided a task ID."],
+    parameters: Type.Object({
+      ...connectionParams,
+      chipId: Type.Optional(Type.String()),
+      taskIndex: Type.Optional(Type.Number({ description: "Recent task index, newest first. Defaults to 0." })),
+      figureIndex: Type.Optional(Type.Number({ description: "Figure index within the selected task. Defaults to 0." })),
+      withinHours: Type.Optional(Type.Number()),
+    }),
+    async execute(_toolCallId, params: { profile?: string; configPath?: string; useEnv?: boolean; chipId?: string; taskIndex?: number; figureIndex?: number; withinHours?: number }) {
+      const client = await makeClient(params);
+      const chipId = await defaultChipId(client, params.chipId);
+      const end = new Date();
+      const start = new Date(end.getTime() - (params.withinHours ?? 168) * 3600_000);
+      const payload = await client.listTaskResults({ chipId, startAt: start.toISOString(), endAt: end.toISOString(), limit: 50 });
+      const tasks = arrayFromPayload(payload).filter((item): item is Record<string, unknown> => Boolean(item) && typeof item === "object");
+      const task = tasks[params.taskIndex ?? 0];
+      const taskId = task && firstString(task, ["task_id", "taskId"]);
+      if (!taskId) throw new Error("No recent calibration task result with a task ID was found");
+      const file: TaskResultFigureFile = await client.getTaskResultFigure(taskId, { index: params.figureIndex ?? 0 });
+      const bytes = Buffer.from(file.data);
+      const mediaType = file.mediaType || mediaTypeForPath(file.path ?? "");
+      const details: FigureDetails = { tool: "qdash_recent_calibration_figure", taskId, path: file.path ?? "", mediaType, sizeBytes: bytes.byteLength, figurePaths: file.figurePaths ?? [], jsonFigurePaths: file.jsonFigurePaths ?? [] };
+      if (mediaType.startsWith("image/")) details.base64 = bytes.toString("base64");
+      else details.text = bytes.toString("utf8");
+      return toTextToolResult(figureResultText(details), { task, selectedPath: details.path }, details);
+    },
+    renderResult(result, _options, theme) {
+      return figureComponent(result.details as unknown as FigureDetails, theme);
+    },
+  });
+
+  pi.registerTool({
     name: "qdash_get_figure",
     label: "QDash Get Figure",
     description: "Fetch a QDash calibration figure by absolute figure path and render images in interactive TUI.",
@@ -2801,6 +2932,58 @@ export default function qdashExtension(pi: ExtensionAPI) {
     renderResult(result, _options, theme) {
       const data = (result.details as { data?: DashboardInsightsResult } | undefined)?.data;
       return data ? textComponent(dashboardInsightLines(data).join("\n").split("\n"), theme) : textComponent(["No dashboard insights"], theme);
+    },
+  });
+
+  pi.registerTool({
+    name: "qdash_compare_calibration",
+    label: "QDash Compare Calibration",
+    description: "Compare repeated calibration results for one qubit or coupling without changing parameters.",
+    promptSnippet: "Compare the latest QDash calibration with the previous one",
+    promptGuidelines: ["Use qdash_compare_calibration when the user asks what changed between recent calibration experiments."],
+    parameters: Type.Object({
+      ...connectionParams,
+      chipId: Type.Optional(Type.String()),
+      qid: Type.Optional(Type.String()),
+      couplingId: Type.Optional(Type.String()),
+      limit: Type.Optional(Type.Number()),
+      color: Type.Optional(Type.Boolean({ description: "Emit ANSI colors in text output for terminal display." })),
+    }),
+    async execute(_toolCallId, params: { profile?: string; configPath?: string; useEnv?: boolean; chipId?: string; qid?: string; couplingId?: string; limit?: number; color?: boolean }) {
+      const comparison = await buildCalibrationComparison(params);
+      return toTextToolResult(calibrationComparisonLines(comparison, params.color).join("\\n"), comparison, { tool: "qdash_compare_calibration", webBaseUrl: comparison.context.webBaseUrl });
+    },
+    renderResult(result, _options, theme) {
+      const comparison = (result.details as { data?: CalibrationComparison } | undefined)?.data;
+      return comparison ? textComponent(calibrationComparisonLines(comparison).join("\\n").split("\\n"), theme) : textComponent(["No calibration comparison"], theme);
+    },
+  });
+
+  pi.registerTool({
+    name: "qdash_investigate",
+    label: "QDash Investigate",
+    description: "Run a read-only natural-language-friendly QDash investigation combining recent calibration results, target history, failures, issues, forum context, and safe recommendations.",
+    promptSnippet: "Investigate a QDash target or recent calibration by correlating results, figures, issues, and Forum context",
+    promptGuidelines: [
+      "Use qdash_investigate when the user asks to investigate, compare, or understand a QDash target or recent calibration in natural language.",
+      "This tool is read-only; do not execute tasks or change parameters based on its recommendation without explicit confirmation.",
+    ],
+    parameters: Type.Object({
+      ...connectionParams,
+      chipId: Type.Optional(Type.String()),
+      qid: Type.Optional(Type.String()),
+      couplingId: Type.Optional(Type.String()),
+      limit: Type.Optional(Type.Number()),
+      withinHours: Type.Optional(Type.Number()),
+      color: Type.Optional(Type.Boolean({ description: "Emit ANSI colors in text output for terminal display." })),
+    }),
+    async execute(_toolCallId, params: { profile?: string; configPath?: string; useEnv?: boolean; chipId?: string; qid?: string; couplingId?: string; limit?: number; withinHours?: number; color?: boolean }) {
+      const report = await buildInvestigationReport(params);
+      return toTextToolResult(investigationLines(report, params.color).join("\\n"), report, { tool: "qdash_investigate", webBaseUrl: report.context.webBaseUrl });
+    },
+    renderResult(result, _options, theme) {
+      const report = (result.details as { data?: InvestigationReport } | undefined)?.data;
+      return report ? textComponent(investigationLines(report).join("\\n").split("\\n"), theme) : textComponent(["No QDash investigation"], theme);
     },
   });
 

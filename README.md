@@ -53,8 +53,10 @@ pi install git:github.com/orangekame3/pi-qdash
   - `qdash_list_executions`, `qdash_get_execution`, `qdash_wait_execution`, `qdash_compare_executions`
   - `qdash_list_ai_reviews`, `qdash_get_provenance_stats`
   - `qdash_list_forum_posts`, `qdash_get_forum_post`, `qdash_list_forum_replies`
-  - `qdash_get_figure`, `qdash_get_task_figures`
+  - `qdash_get_figure`, `qdash_get_task_figures`, `qdash_recent_calibration_figure`
 - Harness overview and insight tools:
+  - `qdash_investigate` (natural-language-friendly read-only correlation of recent calibration, target history, failures, issues, and Forum context)
+  - `qdash_compare_calibration` (compare repeated calibration output parameters)
   - `qdash_dashboard`
   - `qdash_dashboard_insights`
   - `qdash_recent_calibration_summary`

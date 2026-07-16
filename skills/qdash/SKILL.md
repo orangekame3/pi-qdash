@@ -20,9 +20,11 @@ Use the pi-qdash tools instead of scraping the UI or hand-writing auth headers.
    - `qdash_list_executions`, `qdash_get_execution`
    - `qdash_list_ai_reviews`, `qdash_get_provenance_stats`
    - `qdash_list_forum_posts`, `qdash_get_forum_post`, `qdash_list_forum_replies`
-   - `qdash_get_figure`, `qdash_get_task_figures`
+   - `qdash_get_figure`, `qdash_get_task_figures`, `qdash_recent_calibration_figure`
    - `qdash_create_forum_evidence_reply` for confirmed evidence curation replies with visible task figures
 3. Use harness overview tools for status and triage:
+   - `qdash_investigate` for natural-language requests to investigate or compare recent calibration, target history, figures, failures, issues, and Forum context
+   - `qdash_compare_calibration` for read-only before/after comparison of repeated target calibration results
    - `qdash_dashboard`
    - `qdash_dashboard_insights`
    - `qdash_recent_calibration_summary`
@@ -96,4 +98,7 @@ When the user wants to preserve an investigated observation in QDash forum/notes
 - Never print tokens, passwords, Cloudflare Access secrets, or full profile contents.
 - Treat write/operational endpoints (agent session/action creation, candidate commits, forum create/update, flow execute, git push/pull, re-execute, admin/auth APIs) as sensitive and ask the user before any write workflow.
 - Write-oriented QDash tools are approval-gated. In interactive pi, let the extension prompt for confirmation. In non-interactive runs, set `confirmWrite: true` only after explicit user confirmation.
+- Use `qdash_investigate` for natural-language requests to investigate, compare, or understand a target or recent calibration; it is read-only and combines recent results with target, Forum, issue, and recommendation context.
+- Use `qdash_compare_calibration` when the user asks what changed between recent calibration experiments; treat differences as evidence, not automatic approval to commit/apply parameters.
+- Use `qdash_recent_calibration_figure` when the user asks to see recent experiment images without a task ID.
 - Prefer summarizing large responses with counts, IDs, time ranges, and notable values.
