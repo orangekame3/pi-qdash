@@ -46,6 +46,8 @@ pi install git:github.com/orangekame3/pi-qdash
 - Dedicated read-only tools:
   - `qdash_list_chips`, `qdash_get_default_chip`
   - `qdash_get_chip_metrics`, `qdash_list_chip_qubits`, `qdash_list_chip_couplings`
+  - `qdash_list_cryostats`, `qdash_list_cooldowns`
+  - `qdash_get_cooldown_wiring`, `qdash_list_cooldown_wiring_events`
   - `qdash_get_timeseries`, `qdash_plot_timeseries`
   - `qdash_list_task_results`, `qdash_get_task_result`
   - `qdash_list_issues`
@@ -77,6 +79,8 @@ pi install git:github.com/orangekame3/pi-qdash
   - `qdash_get_agent_candidate_commit`, `qdash_apply_agent_candidate_commit`, `qdash_wait_agent_candidate_apply`
 - `qdash_query`: fallback for read-only queries that do not yet have a dedicated tool
 - `qdash_raw_get`: call read-only GET endpoints not covered by `qdash_query` through the qdash-client transport
+
+`qdash_get_cooldown_wiring` resolves the active/newest cooldown automatically from a cryostat or the current/default chip, and returns compact human-readable wiring markdown. Raw BlockNote blocks and wiring checkpoint history are opt-in to keep the normal response focused.
 
 Secrets such as `api_token`, passwords, and Cloudflare Access secrets are redacted from tool output. Write-oriented agent/forum workflow tools are approval-gated: interactive pi shows a confirmation prompt, and non-interactive runs require `confirmWrite: true`.
 

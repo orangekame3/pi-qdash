@@ -21,6 +21,11 @@ type QDashQueryParams = {
     | "chip_qubit"
     | "chip_couplings"
     | "chip_coupling"
+    | "cryostats"
+    | "cryostat"
+    | "cooldowns"
+    | "cooldown"
+    | "cooldown_wiring_events"
     | "timeseries"
     | "task_results"
     | "task_result"
@@ -60,6 +65,8 @@ type QDashQueryParams = {
   chipId?: string;
   qid?: string;
   couplingId?: string;
+  cryoId?: string;
+  cooldownId?: string;
   taskId?: string;
   taskName?: string;
   task?: string;
@@ -274,6 +281,11 @@ const QueryAction = Type.Union([
   Type.Literal("chip_qubit"),
   Type.Literal("chip_couplings"),
   Type.Literal("chip_coupling"),
+  Type.Literal("cryostats"),
+  Type.Literal("cryostat"),
+  Type.Literal("cooldowns"),
+  Type.Literal("cooldown"),
+  Type.Literal("cooldown_wiring_events"),
   Type.Literal("timeseries"),
   Type.Literal("task_results"),
   Type.Literal("task_result"),
@@ -334,6 +346,8 @@ const querySchema = Type.Object({
   chipId: Type.Optional(Type.String({ description: "Chip ID. Defaults to the active/default chip for chip-scoped actions when omitted." })),
   qid: Type.Optional(Type.String()),
   couplingId: Type.Optional(Type.String()),
+  cryoId: Type.Optional(Type.String()),
+  cooldownId: Type.Optional(Type.String()),
   taskId: Type.Optional(Type.String()),
   taskName: Type.Optional(Type.String()),
   task: Type.Optional(Type.String({ description: "Task parameter used by latest/history endpoints." })),
@@ -402,6 +416,106 @@ function pathPart(value: string): string {
 function requireValue(value: string | undefined, name: string): string {
   if (!value) throw new Error(`${name} is required for this QDash action`);
   return value;
+}
+
+type CooldownRecord = {
+  cooldown_id: string;
+  cryo_id: string;
+  description?: string;
+  started_at: string;
+  ended_at?: string | null;
+  chip_ids?: string[];
+  wiring_info?: string;
+  wiring_blocks?: Record<string, unknown>[];
+};
+
+type CooldownListResponse = { cooldowns?: CooldownRecord[] };
+
+type CooldownWiringParams = {
+  profile?: string;
+  configPath?: string;
+  useEnv?: boolean;
+  chipId?: string;
+  cryoId?: string;
+  cooldownId?: string;
+  includeBlocks?: boolean;
+  includeHistory?: boolean;
+  historyLimit?: number;
+};
+
+function newestCooldown(cooldowns: CooldownRecord[]): CooldownRecord | undefined {
+  return [...cooldowns].sort((a, b) => {
+    const activeDifference = Number(a.ended_at != null) - Number(b.ended_at != null);
+    if (activeDifference !== 0) return activeDifference;
+    return Date.parse(b.started_at || "") - Date.parse(a.started_at || "");
+  })[0];
+}
+
+async function resolveCooldownWiring(params: CooldownWiringParams) {
+  params = applyQDashContext(params);
+  const client = await makeClient(params);
+  let selection: string;
+  let cooldown: CooldownRecord;
+  let resolvedChipId = params.chipId ?? currentContext.chipId;
+
+  if (params.cooldownId) {
+    cooldown = await rawGet<CooldownRecord>(client, `/cooldowns/${pathPart(params.cooldownId)}`);
+    selection = "explicit cooldownId";
+  } else {
+    resolvedChipId = params.chipId ?? (params.cryoId ? undefined : await defaultChipId(client));
+    const response = await rawGet<CooldownListResponse>(client, "/cooldowns", {
+      cryo_id: params.cryoId,
+      chip_id: resolvedChipId,
+    });
+    const selected = newestCooldown(response.cooldowns ?? []);
+    if (!selected) {
+      const scope = params.cryoId ? `cryo ${params.cryoId}` : `chip ${resolvedChipId}`;
+      throw new Error(`No cooldown containing wiring information was found for ${scope}`);
+    }
+    cooldown = await rawGet<CooldownRecord>(client, `/cooldowns/${pathPart(selected.cooldown_id)}`);
+    selection = params.cryoId ? "active/newest cooldown for cryo" : "active/newest cooldown for chip";
+  }
+
+  const blocks = Array.isArray(cooldown.wiring_blocks) ? cooldown.wiring_blocks : [];
+  const wiringInfo = typeof cooldown.wiring_info === "string" ? cooldown.wiring_info.trim() : "";
+  const includeBlocks = params.includeBlocks === true || !wiringInfo;
+  const history = params.includeHistory
+    ? await rawGet(client, `/cooldowns/${pathPart(cooldown.cooldown_id)}/wiring-events`, {
+        limit: params.historyLimit ?? 20,
+        skip: 0,
+      })
+    : undefined;
+  let cryostat: unknown;
+  try {
+    cryostat = await rawGet(client, `/cryostats/${pathPart(cooldown.cryo_id)}`);
+  } catch {
+    // Wiring remains useful on servers where cryostat detail is not accessible.
+  }
+
+  return {
+    selection: {
+      strategy: selection,
+      requested_chip_id: resolvedChipId,
+      requested_cryo_id: params.cryoId,
+      resolved_cooldown_id: cooldown.cooldown_id,
+    },
+    cryostat,
+    cooldown: {
+      cooldown_id: cooldown.cooldown_id,
+      cryo_id: cooldown.cryo_id,
+      description: cooldown.description,
+      started_at: cooldown.started_at,
+      ended_at: cooldown.ended_at,
+      chip_ids: cooldown.chip_ids ?? [],
+    },
+    wiring: {
+      markdown: wiringInfo || undefined,
+      block_count: blocks.length,
+      blocks: includeBlocks ? blocks : undefined,
+      blocks_omitted: !includeBlocks && blocks.length > 0,
+    },
+    history,
+  };
 }
 
 function qdashWebBaseUrl(client: QDashClient): string {
@@ -1796,6 +1910,11 @@ async function executeQuery(params: QDashQueryParams) {
     case "chip_qubit": return client.getChipQubit(await defaultChipId(client, params.chipId), requireValue(params.qid, "qid"));
     case "chip_couplings": return client.listChipCouplings(await defaultChipId(client, params.chipId), { limit: params.limit, offset: params.offset });
     case "chip_coupling": return client.getChipCoupling(await defaultChipId(client, params.chipId), requireValue(params.couplingId, "couplingId"));
+    case "cryostats": return rawGet(client, "/cryostats");
+    case "cryostat": return rawGet(client, `/cryostats/${pathPart(requireValue(params.cryoId, "cryoId"))}`);
+    case "cooldowns": return rawGet(client, "/cooldowns", { cryo_id: params.cryoId, chip_id: params.chipId });
+    case "cooldown": return rawGet(client, `/cooldowns/${pathPart(requireValue(params.cooldownId, "cooldownId"))}`);
+    case "cooldown_wiring_events": return rawGet(client, `/cooldowns/${pathPart(requireValue(params.cooldownId, "cooldownId"))}/wiring-events`, { limit: params.limit, skip: params.skip });
     case "timeseries": return client.getTaskResultsTimeseries({ chipId: await defaultChipId(client, params.chipId), parameter: requireValue(params.parameter, "parameter"), tag: params.tag, qid: params.qid, startAt: requireValue(params.startAt, "startAt"), endAt: requireValue(params.endAt, "endAt") });
     case "task_results": return rawGet(client, "/task-results", { chip_id: params.chipId, task_name: params.taskName, qid: params.qid, coupling_id: params.couplingId, execution_id: params.executionId, username: params.username, status: params.status, start_from: params.startFrom ?? params.startAt, start_to: params.startTo ?? params.endAt, message_contains: params.messageContains, limit: params.limit, skip: params.skip });
     case "task_result": return client.getTaskResult(requireValue(params.taskId, "taskId"));
@@ -1878,7 +1997,7 @@ export default function qdashExtension(pi: ExtensionAPI) {
     name: "qdash_query",
     label: "QDash Query",
     description: "Run common read-only QDash queries via @oqtopus-team/qdash-client.",
-    promptSnippet: "Query QDash chips, metrics, tasks, files, flows, executions, projects, forum posts, and provenance",
+    promptSnippet: "Query QDash chips, cryostats, cooldown wiring, metrics, tasks, files, flows, executions, projects, forum posts, and provenance",
     promptGuidelines: [
       "Prefer dedicated QDash tools such as qdash_list_chips, qdash_get_chip_metrics, qdash_list_task_results, qdash_list_issues, qdash_list_flows, and qdash_list_executions when they match the task.",
       "Use qdash_query for read-only QDash data access not covered by a dedicated tool, instead of curl or scraping the UI.",
@@ -1962,6 +2081,73 @@ export default function qdashExtension(pi: ExtensionAPI) {
     promptSnippet: "List couplings for a QDash chip",
     action: "chip_couplings",
     parameters: Type.Object({ ...connectionParams, ...chipScopedParams, ...paginationParams }),
+  });
+
+  registerQueryTool({
+    name: "qdash_list_cryostats",
+    label: "QDash List Cryostats",
+    description: "List cryostats available in QDash.",
+    promptSnippet: "List QDash cryostats before inspecting cooldowns or wiring",
+    action: "cryostats",
+    parameters: Type.Object(connectionParams),
+  });
+
+  registerQueryTool({
+    name: "qdash_list_cooldowns",
+    label: "QDash List Cooldowns",
+    description: "List QDash cooldowns, optionally filtered by cryostat or chip.",
+    promptSnippet: "List cryostat cooldowns and identify the active or latest wiring context",
+    action: "cooldowns",
+    parameters: Type.Object({
+      ...connectionParams,
+      chipId: Type.Optional(Type.String()),
+      cryoId: Type.Optional(Type.String()),
+    }),
+  });
+
+  pi.registerTool({
+    name: "qdash_get_cooldown_wiring",
+    label: "QDash Cooldown Wiring",
+    description: "Get cryostat/cooldown wiring. A cooldown can be selected explicitly, or the active/newest cooldown is resolved automatically from cryoId or the active/default chip.",
+    promptSnippet: "Resolve the relevant cryostat cooldown and retrieve its human-readable wiring information",
+    promptGuidelines: [
+      "Prefer qdash_get_cooldown_wiring whenever the user asks about cryo, cryostat, cooldown, cabling, or wiring.",
+      "Omit cooldownId to automatically select the active cooldown, falling back to the newest cooldown for the cryostat or chip.",
+      "The markdown field is the compact human-readable wiring document. Request includeBlocks only when raw BlockNote structure or embedded content is needed.",
+      "Use includeHistory when investigating when or why wiring changed.",
+      "Never expose QDash tokens, passwords, or Cloudflare Access secrets.",
+    ],
+    parameters: Type.Object({
+      ...connectionParams,
+      chipId: Type.Optional(Type.String({ description: "Chip used to resolve its active/newest cooldown. Defaults to the current/default chip." })),
+      cryoId: Type.Optional(Type.String({ description: "Cryostat used to resolve its active/newest cooldown." })),
+      cooldownId: Type.Optional(Type.String({ description: "Explicit cooldown ID; takes precedence over chipId and cryoId." })),
+      includeBlocks: Type.Optional(Type.Boolean({ description: "Include raw BlockNote wiring blocks. Defaults to false unless markdown is unavailable." })),
+      includeHistory: Type.Optional(Type.Boolean({ description: "Include wiring checkpoint history." })),
+      historyLimit: Type.Optional(Type.Number({ description: "Maximum wiring history entries; defaults to 20." })),
+    }),
+    async execute(_toolCallId, params: CooldownWiringParams) {
+      const data = await resolveCooldownWiring(params);
+      const client = await makeClient(params);
+      return toToolResult(withQDashLinks(client, data), {
+        tool: "qdash_get_cooldown_wiring",
+        webBaseUrl: qdashWebBaseUrl(client),
+      });
+    },
+  });
+
+  registerQueryTool({
+    name: "qdash_list_cooldown_wiring_events",
+    label: "QDash Cooldown Wiring History",
+    description: "List wiring change checkpoints for a cooldown.",
+    promptSnippet: "Inspect QDash cooldown wiring change history and snapshots",
+    action: "cooldown_wiring_events",
+    parameters: Type.Object({
+      ...connectionParams,
+      cooldownId: Type.String(),
+      limit: Type.Optional(Type.Number()),
+      skip: Type.Optional(Type.Number()),
+    }),
   });
 
   registerQueryTool({

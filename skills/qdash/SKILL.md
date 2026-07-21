@@ -13,6 +13,8 @@ Use the pi-qdash tools instead of scraping the UI or hand-writing auth headers.
 2. Prefer dedicated read-only tools when they match the task:
    - `qdash_list_chips`, `qdash_get_default_chip`
    - `qdash_get_chip_metrics`, `qdash_list_chip_qubits`, `qdash_list_chip_couplings`
+   - `qdash_list_cryostats`, `qdash_list_cooldowns`
+   - `qdash_get_cooldown_wiring`, `qdash_list_cooldown_wiring_events`
    - `qdash_get_timeseries`, `qdash_plot_timeseries`
    - `qdash_list_task_results`, `qdash_get_task_result`
    - `qdash_list_issues`
@@ -42,6 +44,7 @@ Use the pi-qdash tools instead of scraping the UI or hand-writing auth headers.
 5. Use `qdash_query` for common read-only QDash operations not covered by a dedicated tool:
    - `chips`, `default_chip`, `metrics_config`, `chip_metrics`
    - `chip_qubits`, `chip_qubit`, `chip_couplings`, `chip_coupling`
+   - `cryostats`, `cryostat`, `cooldowns`, `cooldown`, `cooldown_wiring_events`
    - `timeseries`, `task_results`, `task_result`, `task_note`, `task_result_issues`
    - `qubit_latest`, `qubit_history`, `coupling_latest`, `coupling_history`
    - `tasks`, `task_knowledge`, `task_knowledge_markdown`
@@ -68,6 +71,8 @@ Use these commands to make pi behave like a QDash-specific harness with persiste
 ```
 
 Prefer the current context when the user has already selected a profile/chip/session. Tools use that context when parameters are omitted.
+
+For cryostat wiring requests, start with `qdash_get_cooldown_wiring`. Pass `cooldownId` when the user names one; otherwise pass `cryoId`, or omit both to resolve the active/newest cooldown from the current/default chip. Prefer the compact `wiring.markdown`; request raw blocks only when structural or embedded BlockNote data is necessary, and request history when investigating wiring changes.
 
 ## Configuration
 
