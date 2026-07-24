@@ -16,11 +16,11 @@ It uses [`@oqtopus-team/qdash-client`](https://www.npmjs.com/package/@oqtopus-te
 
 ## Key Features
 
-- **🔍 Read-only investigation**: dozens of dedicated tools to inspect chips, qubits, couplings, calibration task results, executions, issues, and Forum posts — with secrets always redacted.
-- **📊 Dashboards & insights**: compact themed dashboards, triage overviews, target-level incident reports, degradation reports, and wiring insights.
-- **🤖 Agent calibration workflow**: create agent sessions, submit and track agent actions, and commit/apply calibration candidates — all write operations are approval-gated.
-- **🖼️ Figures**: fetch calibration PNG/JSON figures and render them inline in the interactive TUI.
-- **💬 Forum integration**: read Forum posts and publish evidence replies built from task results, with embedded figures and history links.
+- **Read-only investigation**: dedicated tools to inspect chips, qubits, couplings, calibration task results, executions, issues, and Forum posts. Secrets are redacted from tool output.
+- **Dashboards and insights**: compact dashboards, triage overviews, target-level incident reports, degradation reports, and wiring insights.
+- **Agent calibration workflow**: create agent sessions, submit and track agent actions, and commit/apply calibration candidates. Write operations are approval-gated.
+- **Figures**: fetch calibration PNG/JSON figures and render them in the interactive TUI.
+- **Forum integration**: read Forum posts and publish evidence replies built from task results.
 
 ## Installation
 
@@ -43,7 +43,7 @@ In interactive pi, set up the session context first:
 /qdash-dashboard
 ```
 
-Then ask pi about your device in natural language, or use the tools directly. See the documentation below for the full tool and command reference.
+See the documentation below for the full tool and command reference.
 
 ## Documentation
 
