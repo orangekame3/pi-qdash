@@ -1,121 +1,66 @@
+<!-- markdownlint-disable MD041 -->
+![OQTOPUS logo](./docs/asset/oqtopus-logo.png)
+
 # pi-qdash
 
-A pi extension for querying QDash from pi. It uses `@oqtopus-team/qdash-client` and reuses existing `QDASH_*` environment variables or profiles from `~/.config/qdash/config.ini` / `$XDG_CONFIG_HOME/qdash/config.ini`.
+[![CI](https://github.com/orangekame3/pi-qdash/actions/workflows/ci.yaml/badge.svg)](https://github.com/orangekame3/pi-qdash/actions/workflows/ci.yaml)
+[![npm version](https://img.shields.io/npm/v/%40orangekame3%2Fpi-qdash.svg)](https://www.npmjs.com/package/@orangekame3/pi-qdash)
+[![License](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](https://opensource.org/licenses/Apache-2.0)
+[![slack](https://img.shields.io/badge/slack-OQTOPUS-pink.svg?logo=slack&style=plastic)](https://join.slack.com/t/oqtopus/shared_invite/zt-3bpjb7yc3-Vg8IYSMY1m5wV3DR~TMSnw)
 
-## Usage
+## Overview
 
-Install from npm:
+**pi-qdash** is a [pi](https://github.com/badlogic/pi-mono) extension for querying [QDash](https://github.com/oqtopus-team/qdash), the large-scale QPU calibration platform in the OQTOPUS ecosystem, directly from the pi coding agent.
+
+It uses [`@oqtopus-team/qdash-client`](https://www.npmjs.com/package/@oqtopus-team/qdash-client) and reuses existing `QDASH_*` environment variables or profiles from `~/.config/qdash/config.ini` / `$XDG_CONFIG_HOME/qdash/config.ini`.
+
+## Key Features
+
+- **🔍 Read-only investigation**: dozens of dedicated tools to inspect chips, qubits, couplings, calibration task results, executions, issues, and Forum posts — with secrets always redacted.
+- **📊 Dashboards & insights**: compact themed dashboards, triage overviews, target-level incident reports, degradation reports, and wiring insights.
+- **🤖 Agent calibration workflow**: create agent sessions, submit and track agent actions, and commit/apply calibration candidates — all write operations are approval-gated.
+- **🖼️ Figures**: fetch calibration PNG/JSON figures and render them inline in the interactive TUI.
+- **💬 Forum integration**: read Forum posts and publish evidence replies built from task results, with embedded figures and history links.
+
+## Installation
 
 ```bash
 pi install npm:@orangekame3/pi-qdash
 ```
 
-Try from npm without installing:
+Or try it without installing:
 
 ```bash
 pi -e npm:@orangekame3/pi-qdash
 ```
 
-For local development, install dependencies in this repository:
+## Quick Start
 
-```bash
-npm install
-```
-
-Try the local package temporarily from the repository root:
-
-```bash
-pi -e .
-```
-
-Install the local package for regular use:
-
-```bash
-pi install "$(pwd)"
-```
-
-Or install it from GitHub:
-
-```bash
-pi install git:github.com/orangekame3/pi-qdash
-```
-
-## Tools
-
-- `qdash_config_info`: inspect profiles and non-secret connection settings
-- Dedicated read-only tools:
-  - `qdash_list_chips`, `qdash_get_default_chip`
-  - `qdash_get_chip_metrics`, `qdash_list_chip_qubits`, `qdash_list_chip_couplings`
-  - `qdash_list_cryostats`, `qdash_list_cooldowns`
-  - `qdash_get_cooldown_wiring`, `qdash_wiring_insights`, `qdash_list_cooldown_wiring_events`
-  - `qdash_get_timeseries`, `qdash_plot_timeseries`
-  - `qdash_list_task_results`, `qdash_get_task_result`
-  - `qdash_list_issues`
-  - `qdash_list_flows`, `qdash_get_flow`
-  - `qdash_list_executions`, `qdash_get_execution`, `qdash_wait_execution`, `qdash_compare_executions`
-  - `qdash_list_ai_reviews`, `qdash_get_provenance_stats`
-  - `qdash_list_forum_posts`, `qdash_get_forum_post`, `qdash_list_forum_replies`
-  - `qdash_get_figure`, `qdash_get_task_figures`, `qdash_recent_calibration_figure`
-- Harness overview and insight tools:
-  - `qdash_investigate` (natural-language-friendly read-only correlation of recent calibration, target history, failures, issues, and Forum context)
-  - `qdash_compare_calibration` (compare repeated calibration output parameters)
-  - `qdash_dashboard`
-  - `qdash_dashboard_insights`
-  - `qdash_recent_calibration_summary`
-  - `qdash_recommend_next_action`
-  - `qdash_triage_overview`
-  - `qdash_target_report` (target-level read-only incident/operations report)
-  - `qdash_plan_calibration` (safe dry-run calibration plan; never executes)
-  - `qdash_validate_calibration` (post-task validation gates; read-only)
-  - `qdash_degradation_report` (provenance drift, changes, lock, and downstream recommendations)
-- Agent calibration workflow tools:
-  - `qdash_create_agent_session`
-  - `qdash_get_agent_session`
-  - `qdash_submit_agent_action`
-  - `qdash_get_agent_action`, `qdash_list_agent_actions`, `qdash_wait_agent_action`
-  - `qdash_list_agent_action_candidates`
-  - `qdash_execute_agent_action`
-  - `qdash_commit_agent_candidate`, `qdash_commit_agent_campaign_candidates`
-  - `qdash_get_agent_candidate_commit`, `qdash_apply_agent_candidate_commit`, `qdash_wait_agent_candidate_apply`
-- `qdash_query`: fallback for read-only queries that do not yet have a dedicated tool
-- `qdash_raw_get`: call read-only GET endpoints not covered by `qdash_query` through the qdash-client transport
-
-`qdash_get_cooldown_wiring` resolves the active/newest cooldown automatically from a cryostat or the current/default chip, and returns compact human-readable wiring markdown with opt-in attenuation insights. `qdash_wiring_insights` focuses on those insights: it parses the wiring table, totals control/readout attenuation, highlights unusual totals, and maps control-port anomalies to qubits using the MUX×4 convention. Raw BlockNote blocks and wiring checkpoint history are opt-in to keep the normal response focused.
-
-Secrets such as `api_token`, passwords, and Cloudflare Access secrets are redacted from tool output. Write-oriented agent/forum workflow tools are approval-gated: interactive pi shows a confirmation prompt, and non-interactive runs require `confirmWrite: true`.
-
-Forum read tools render compact boxed summaries for list/detail/reply views. Figure tools fetch calibration PNG/JSON figures by path or task result through qdash-client helpers, and render images in interactive TUI. Forum evidence can be previewed read-only with `qdash_preview_forum_evidence_reply`, then published through confirmation-gated `qdash_create_forum_evidence_reply`; other forum writes include `qdash_create_forum_post` and `qdash_update_forum_post`. The evidence-reply helper builds a markdown reply from a task result, embeds figures so they are visible in the forum, links recent same-task history, and marks the reply with `— 🤖 by pi-qdash`.
-
-## Skill
-
-This package also provides `/skill:qdash`, which guides pi to choose the right QDash tools, avoid exposing secrets, and prefer read-only operations.
-
-## Commands
+In interactive pi, set up the session context first:
 
 ```text
-/qdash-setup [profile] [chip_id]
-/qdash-use-profile <profile>
-/qdash-use-chip [chip_id]
-/qdash-use-agent-session <session_id>
-/qdash-context
-/qdash-dashboard [limit]
-/qdash-target-report qid <qid> | coupling <coupling_id>
-/qdash-plan-calibration
-/qdash-degradation-report
-/qdash-wiring-insights
-/qdash-refresh [limit]
-/qdash-clear-context
-/qdash-config [profile]
+/qdash-setup <profile> <chip_id>
+/qdash-dashboard
 ```
 
-For the common path, install the package and run `/qdash-setup mackerel 144Qv1` in interactive pi. The setup command stores the session-local profile/chip context, refreshes the footer status line, and opens the dashboard widget.
+Then ask pi about your device in natural language, or use the tools directly. See the documentation below for the full tool and command reference.
 
-These commands manage session-local QDash context, update the pi status/widget, show or refresh a themed compact QDash dashboard, and show non-secret QDash configuration details. Tools use the current profile/chip context when their parameters are omitted. In interactive mode, the highlighted footer status line shows the active QDash profile, chip, and agent session.
+## Documentation
 
-`qdash_dashboard` and `qdash_triage_overview` provide boxed compact text output for non-interactive runs and custom TUI renderers for nicer interactive tool results. `qdash_target_report` correlates one qubit/coupling's recent task results, failures, open issues, forum posts, and a conservative next-action recommendation; it is read-only and never executes calibration. `qdash_plan_calibration` turns that evidence into a confirmation-gated dry-run runbook with explicit safety gates. Pass `color: true` to emit ANSI-colored text output in terminal-oriented non-interactive usage.
+- [Tool Reference](./docs/tools.md)
+- [Commands & Skills](./docs/commands.md)
+- [Contributing](./docs/CONTRIBUTING.md)
 
-## Development
+## Citation
 
-```bash
-npm run check
-```
+Citation information is available in the [CITATION](./CITATION.cff) file.
+
+## Contact
+
+You can contact us by creating an issue in this repository or by email:
+
+- [oqtopus-team[at]googlegroups.com](mailto:oqtopus-team[at]googlegroups.com)
+
+## License
+
+pi-qdash is released under the [Apache License 2.0](./LICENSE).
