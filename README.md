@@ -34,6 +34,8 @@ Or try it without installing:
 pi -e npm:@orangekame3/pi-qdash
 ```
 
+Requires pi v0.74.0 or later.
+
 ## Quick Start
 
 In interactive pi, set up the session context first:
