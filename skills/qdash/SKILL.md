@@ -14,7 +14,7 @@ Use the pi-qdash tools instead of scraping the UI or hand-writing auth headers.
    - `qdash_list_chips`, `qdash_get_default_chip`
    - `qdash_get_chip_metrics`, `qdash_list_chip_qubits`, `qdash_list_chip_couplings`
    - `qdash_list_cryostats`, `qdash_list_cooldowns`
-   - `qdash_get_cooldown_wiring`, `qdash_list_cooldown_wiring_events`
+   - `qdash_get_cooldown_wiring`, `qdash_wiring_insights`, `qdash_list_cooldown_wiring_events`
    - `qdash_get_timeseries`, `qdash_plot_timeseries`
    - `qdash_list_task_results`, `qdash_get_task_result`
    - `qdash_list_issues`
@@ -66,13 +66,14 @@ Use these commands to make pi behave like a QDash-specific harness with persiste
 /qdash-use-agent-session <session_id>
 /qdash-context
 /qdash-dashboard [limit]
+/qdash-wiring-insights
 /qdash-refresh [limit]
 /qdash-clear-context
 ```
 
 Prefer the current context when the user has already selected a profile/chip/session. Tools use that context when parameters are omitted.
 
-For cryostat wiring requests, start with `qdash_get_cooldown_wiring`. Pass `cooldownId` when the user names one; otherwise pass `cryoId`, or omit both to resolve the active/newest cooldown from the current/default chip. Prefer the compact `wiring.markdown`; request raw blocks only when structural or embedded BlockNote data is necessary, and request history when investigating wiring changes.
+For cryostat wiring requests, start with `qdash_get_cooldown_wiring`. Pass `cooldownId` when the user names one; otherwise pass `cryoId`, or omit both to resolve the active/newest cooldown from the current/default chip. Prefer the compact `wiring.markdown`; request raw blocks only when structural or embedded BlockNote data is necessary, and request history when investigating wiring changes. Set `includeInsights` or call `qdash_wiring_insights` when the user asks what is characteristic, unusual, or worth checking in attenuation; summarize control/readout totals and affected qubits/MUXes instead of dumping the raw table.
 
 ## Configuration
 

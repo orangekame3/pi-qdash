@@ -441,6 +441,28 @@ type CooldownWiringParams = {
   includeBlocks?: boolean;
   includeHistory?: boolean;
   historyLimit?: number;
+  includeInsights?: boolean;
+};
+
+type WiringInsightParams = CooldownWiringParams & {
+  color?: boolean;
+};
+
+type AttenuationEntry = {
+  mux: string;
+  line: "control" | "readout_send";
+  totalDb: number;
+  components: number[];
+  panel?: string;
+  hardwarePort?: string;
+  qid?: string;
+};
+
+type WiringInsights = {
+  entries: AttenuationEntry[];
+  control: { commonTotalDb?: number; anomalies: AttenuationEntry[]; totals: Record<string, number> };
+  readoutSend: { commonTotalDb?: number; anomalies: AttenuationEntry[]; totals: Record<string, number> };
+  suggestions: string[];
 };
 
 function newestCooldown(cooldowns: CooldownRecord[]): CooldownRecord | undefined {
@@ -449,6 +471,145 @@ function newestCooldown(cooldowns: CooldownRecord[]): CooldownRecord | undefined
     if (activeDifference !== 0) return activeDifference;
     return Date.parse(b.started_at || "") - Date.parse(a.started_at || "");
   })[0];
+}
+
+function markdownTableRows(markdown: string): string[][] {
+  return markdown.split("\n")
+    .map((line) => line.trim())
+    .filter((line) => line.startsWith("|") && line.endsWith("|"))
+    .map((line) => line.slice(1, -1).split("|").map((cell) => cell.trim()))
+    .filter((cells) => cells.length >= 7 && !cells.every((cell) => /^-+$/.test(cell.replace(/\s/g, ""))));
+}
+
+function expandPanelSpec(value: string): string[] {
+  return value.split(/[、,]/).flatMap((part) => {
+    const token = part.trim();
+    if (!token) return [];
+    const range = token.match(/^([A-Za-z]+)(\d+)\s*-\s*(\d+)$/);
+    if (range) {
+      const [, prefix, startText, endText] = range;
+      const start = Number(startText);
+      const end = Number(endText);
+      const step = start <= end ? 1 : -1;
+      const panels: string[] = [];
+      for (let value = start; step > 0 ? value <= end : value >= end; value += step) panels.push(`${prefix}${value}`);
+      return panels;
+    }
+    return [token];
+  });
+}
+
+function splitPortsAndPanels(cell: string): { ports: string[]; panels: string[] } {
+  const [portsText = cell, panelsText = ""] = cell.split(/\s+\/\s+/, 2);
+  return {
+    ports: portsText.split(/[、,]/).map((part) => part.trim()).filter(Boolean),
+    panels: expandPanelSpec(panelsText),
+  };
+}
+
+function attenuationNumbers(text: string): number[] {
+  return [...text.matchAll(/(?:追加\s*)?(\d+(?:\.\d+)?)\s*dB/gi)].map((match) => Number(match[1])).filter(Number.isFinite);
+}
+
+function panelAttenuationTotals(cell: string): Array<{ panels?: string[]; components: number[]; totalDb: number }> {
+  const parenthesized = [...cell.matchAll(/([^（）]+)（([^）]+)）/g)].map((match) => {
+    const components = attenuationNumbers(match[1]);
+    return { panels: expandPanelSpec(match[2]), components, totalDb: components.reduce((sum, value) => sum + value, 0) };
+  }).filter((segment) => segment.components.length > 0);
+  if (parenthesized.length > 0) return parenthesized;
+  const components = attenuationNumbers(cell);
+  return components.length > 0 ? [{ components, totalDb: components.reduce((sum, value) => sum + value, 0) }] : [];
+}
+
+function mostCommonTotal(entries: AttenuationEntry[]): number | undefined {
+  const counts = new Map<number, number>();
+  for (const entry of entries) counts.set(entry.totalDb, (counts.get(entry.totalDb) ?? 0) + 1);
+  return [...counts.entries()].sort((a, b) => b[1] - a[1] || a[0] - b[0])[0]?.[0];
+}
+
+function totalHistogram(entries: AttenuationEntry[]): Record<string, number> {
+  const histogram: Record<string, number> = {};
+  for (const entry of entries) histogram[String(entry.totalDb)] = (histogram[String(entry.totalDb)] ?? 0) + 1;
+  return histogram;
+}
+
+function analyzeWiringMarkdown(markdown: string | undefined): WiringInsights | undefined {
+  if (!markdown) return undefined;
+  const rows = markdownTableRows(markdown);
+  const dataRows = rows.filter((cells) => /^\d+$/.test(cells[0]));
+  const entries: AttenuationEntry[] = [];
+  for (const cells of dataRows) {
+    const mux = cells[0].padStart(2, "0");
+    const muxNumber = Number(cells[0]);
+    const control = splitPortsAndPanels(cells[1] ?? "");
+    const controlSegments = panelAttenuationTotals(cells[5] ?? "");
+    for (let index = 0; index < control.panels.length; index++) {
+      const panel = control.panels[index];
+      const segment = controlSegments.find((item) => item.panels?.includes(panel)) ?? (controlSegments.length === 1 ? controlSegments[0] : undefined);
+      if (!segment) continue;
+      entries.push({
+        mux,
+        line: "control",
+        panel,
+        hardwarePort: control.ports[index],
+        qid: Number.isFinite(muxNumber) ? String(muxNumber * 4 + index) : undefined,
+        totalDb: segment.totalDb,
+        components: segment.components,
+      });
+    }
+    const readoutSegments = panelAttenuationTotals(cells[6] ?? "");
+    const readout = splitPortsAndPanels(cells[2] ?? "");
+    if (readoutSegments[0]) {
+      entries.push({
+        mux,
+        line: "readout_send",
+        panel: readout.panels[0],
+        hardwarePort: readout.ports[0],
+        totalDb: readoutSegments[0].totalDb,
+        components: readoutSegments[0].components,
+      });
+    }
+  }
+  const controlEntries = entries.filter((entry) => entry.line === "control");
+  const readoutEntries = entries.filter((entry) => entry.line === "readout_send");
+  const controlCommon = mostCommonTotal(controlEntries);
+  const readoutCommon = mostCommonTotal(readoutEntries);
+  const controlAnomalies = controlCommon === undefined ? [] : controlEntries.filter((entry) => entry.totalDb !== controlCommon);
+  const readoutAnomalies = readoutCommon === undefined ? [] : readoutEntries.filter((entry) => entry.totalDb !== readoutCommon);
+  const suggestions = [
+    controlCommon !== undefined ? `Control の最頻総減衰量は ${controlCommon} dB です。` : undefined,
+    controlAnomalies.length > 0
+      ? `Control で最頻値と異なるポートが ${controlAnomalies.length} 件あります: ${controlAnomalies.map((entry) => entry.qid ? `q${entry.qid}` : `${entry.mux}/${entry.panel}`).join(", ")}`
+      : controlEntries.length > 0 ? "Control の総減衰量は全ポートで揃っています。" : undefined,
+    readoutCommon !== undefined ? `Readout send の最頻総減衰量は ${readoutCommon} dB です。` : undefined,
+    readoutAnomalies.length > 0
+      ? `Readout send で最頻値と異なる MUX が ${readoutAnomalies.length} 件あります: ${readoutAnomalies.map((entry) => `MUX${entry.mux}`).join(", ")}`
+      : readoutEntries.length > 0 ? "Readout send の総減衰量は全 MUX で揃っています。" : undefined,
+  ].filter((line): line is string => Boolean(line));
+  return {
+    entries,
+    control: { commonTotalDb: controlCommon, anomalies: controlAnomalies, totals: totalHistogram(controlEntries) },
+    readoutSend: { commonTotalDb: readoutCommon, anomalies: readoutAnomalies, totals: totalHistogram(readoutEntries) },
+    suggestions,
+  };
+}
+
+function wiringInsightLines(insights: WiringInsights, color = false): string[] {
+  const accent = (text: string) => color ? ansi("1;36", text) : text;
+  const muted = (text: string) => color ? ansi("90", text) : text;
+  const warning = (text: string) => color ? ansi("33", text) : text;
+  const formatEntry = (entry: AttenuationEntry) => `${entry.qid ? `q${entry.qid}` : `MUX${entry.mux}`} ${muted(`MUX${entry.mux}`)} ${entry.panel ?? ""}${entry.hardwarePort ? `/${entry.hardwarePort}` : ""}: ${warning(`${entry.totalDb} dB`)} (${entry.components.join("+")})`;
+  return boxed("QDash Wiring Insights", [
+    ...insights.suggestions.map((line) => `• ${line}`),
+    "",
+    accent("Control totals"),
+    `  ${Object.entries(insights.control.totals).map(([total, count]) => `${total} dB × ${count}`).join(", ") || muted("none")}`,
+    ...(insights.control.anomalies.length > 0 ? ["", accent("Control anomalies"), ...insights.control.anomalies.map((entry) => `  ${formatEntry(entry)}`)] : []),
+    "",
+    accent("Readout send totals"),
+    `  ${Object.entries(insights.readoutSend.totals).map(([total, count]) => `${total} dB × ${count}`).join(", ") || muted("none")}`,
+    ...(insights.readoutSend.anomalies.length > 0 ? ["", accent("Readout send anomalies"), ...insights.readoutSend.anomalies.map((entry) => `  ${formatEntry(entry)}`)] : []),
+  ], color);
 }
 
 async function resolveCooldownWiring(params: CooldownWiringParams) {
@@ -492,6 +653,8 @@ async function resolveCooldownWiring(params: CooldownWiringParams) {
     // Wiring remains useful on servers where cryostat detail is not accessible.
   }
 
+  const insights = params.includeInsights === true ? analyzeWiringMarkdown(wiringInfo || undefined) : undefined;
+
   return {
     selection: {
       strategy: selection,
@@ -514,6 +677,7 @@ async function resolveCooldownWiring(params: CooldownWiringParams) {
       blocks: includeBlocks ? blocks : undefined,
       blocks_omitted: !includeBlocks && blocks.length > 0,
     },
+    insights,
     history,
   };
 }
@@ -2115,6 +2279,7 @@ export default function qdashExtension(pi: ExtensionAPI) {
       "Omit cooldownId to automatically select the active cooldown, falling back to the newest cooldown for the cryostat or chip.",
       "The markdown field is the compact human-readable wiring document. Request includeBlocks only when raw BlockNote structure or embedded content is needed.",
       "Use includeHistory when investigating when or why wiring changed.",
+      "Set includeInsights when you want to naturally point out unusual attenuation totals and the affected qubits/MUXes; otherwise prefer qdash_wiring_insights for a focused summary.",
       "Never expose QDash tokens, passwords, or Cloudflare Access secrets.",
     ],
     parameters: Type.Object({
@@ -2125,12 +2290,43 @@ export default function qdashExtension(pi: ExtensionAPI) {
       includeBlocks: Type.Optional(Type.Boolean({ description: "Include raw BlockNote wiring blocks. Defaults to false unless markdown is unavailable." })),
       includeHistory: Type.Optional(Type.Boolean({ description: "Include wiring checkpoint history." })),
       historyLimit: Type.Optional(Type.Number({ description: "Maximum wiring history entries; defaults to 20." })),
+      includeInsights: Type.Optional(Type.Boolean({ description: "Analyze attenuation totals and highlight unusual control/readout ports. Defaults to false; use qdash_wiring_insights for a focused summary." })),
     }),
     async execute(_toolCallId, params: CooldownWiringParams) {
       const data = await resolveCooldownWiring(params);
       const client = await makeClient(params);
       return toToolResult(withQDashLinks(client, data), {
         tool: "qdash_get_cooldown_wiring",
+        webBaseUrl: qdashWebBaseUrl(client),
+      });
+    },
+  });
+
+  pi.registerTool({
+    name: "qdash_wiring_insights",
+    label: "QDash Wiring Insights",
+    description: "Analyze cooldown wiring markdown and summarize attenuation totals, unusual ports, and affected qubits/MUXes.",
+    promptSnippet: "Highlight unusual QDash wiring attenuation totals and affected qubits/MUXes",
+    promptGuidelines: [
+      "Use qdash_wiring_insights when the user asks what is characteristic, unusual, different, or noteworthy in wiring attenuation.",
+      "Report totals concisely, and translate control-port anomalies to qids when the MUX×4 mapping is available.",
+      "This tool is read-only and does not change QDash wiring or calibration parameters.",
+      "Never expose QDash tokens, passwords, or Cloudflare Access secrets.",
+    ],
+    parameters: Type.Object({
+      ...connectionParams,
+      chipId: Type.Optional(Type.String({ description: "Chip used to resolve its active/newest cooldown. Defaults to the current/default chip." })),
+      cryoId: Type.Optional(Type.String({ description: "Cryostat used to resolve its active/newest cooldown." })),
+      cooldownId: Type.Optional(Type.String({ description: "Explicit cooldown ID; takes precedence over chipId and cryoId." })),
+      color: Type.Optional(Type.Boolean({ description: "Emit ANSI colors in text output for terminal display." })),
+    }),
+    async execute(_toolCallId, params: WiringInsightParams) {
+      const data = await resolveCooldownWiring({ ...params, includeBlocks: false, includeHistory: false, includeInsights: true });
+      const insights = data.insights;
+      const client = await makeClient(params);
+      if (!insights) return toToolResult(withQDashLinks(client, data), { tool: "qdash_wiring_insights", webBaseUrl: qdashWebBaseUrl(client) });
+      return toTextToolResult(wiringInsightLines(insights, params.color).join("\n"), withQDashLinks(client, data), {
+        tool: "qdash_wiring_insights",
         webBaseUrl: qdashWebBaseUrl(client),
       });
     },
@@ -3462,6 +3658,26 @@ export default function qdashExtension(pi: ExtensionAPI) {
         ctx.ui.notify(`QDash target report updated: ${report.target.label}`, "info");
       } catch (error) {
         ctx.ui.notify(`QDash target report failed: ${error instanceof Error ? error.message : String(error)}`, "error");
+      }
+    },
+  });
+
+  pi.registerCommand("qdash-wiring-insights", {
+    description: "Show wiring attenuation insights for the active/newest cooldown",
+    handler: async (_args, ctx) => {
+      try {
+        const data = await resolveCooldownWiring({ includeBlocks: false, includeHistory: false, includeInsights: true });
+        refreshContextUi(ctx);
+        const insights = data.insights;
+        if (insights) {
+          ctx.ui.setWidget("qdash", (_tui, theme) => textComponent(wiringInsightLines(insights).slice(1, -1), theme, true));
+          ctx.ui.notify(`QDash wiring insights updated: ${data.selection.resolved_cooldown_id}`, "info");
+        } else {
+          ctx.ui.setWidget("qdash", ["QDash Wiring Insights", "No markdown wiring table found"]);
+          ctx.ui.notify("QDash wiring insights unavailable: no markdown table", "warning");
+        }
+      } catch (error) {
+        ctx.ui.notify(`QDash wiring insights failed: ${error instanceof Error ? error.message : String(error)}`, "error");
       }
     },
   });
